@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}관리: 토큰 · IoT{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Aqara 토큰 관리</h1>
+  <p class="muted">DESIGN.md §6.2. 새 refresh_token을 입력하면 즉시 1회 갱신을 시도합니다.</p>
+
+  <h2>현재 상태</h2>
+  {% if token_info.present %}
+    <ul>
+      <li>access_token: <code>{{ token_info.access_token_masked }}</code></li>
+      <li>refreshed_at: {{ token_info.refreshed_at }}</li>
+      <li>expires_at: {{ token_info.expires_at }}</li>
+    </ul>
+  {% else %}
+    <p class="error">토큰이 등록되어 있지 않습니다. 아래 폼에서 refresh_token을 등록하세요.</p>
+  {% endif %}
+
+  <h2>refresh_token 등록 / 재등록</h2>
+  <form id="token-form" onsubmit="return submitToken(event)">
+    <label>refresh_token
+      <input name="refresh_token" required size="60" />
+    </label>
+    <button type="submit">등록 후 갱신 시도</button>
+  </form>
+  <p id="token-result" class="muted"></p>
+</section>
+
+<section class="card">
+  <h1>SmartThings 연결 (OAuth)</h1>
+  <p class="muted">DESIGN.md §15.2. OAuth 2.0 Authorization Code 방식. "SmartThings 연결" 버튼을 누르면
+    SmartThings 로그인·승인 화면으로 이동하고, 승인 후 자동 복귀해 access/refresh 토큰이 저장됩니다.
+    access_token 은 만료 시 refresh_token 으로 자동 갱신됩니다.</p>
+
+  {# OAuth 콜백 결과 메시지 (success/denied/invalid/state_mismatch/exchange_failed) #}
+  {% if st_oauth_msg %}
+    <p class="{{ 'muted' if st_oauth_msg[0] == 'ok' else 'error' }}">{{ st_oauth_msg[1] }}</p>
+  {% endif %}
+  {# PAT 저장/삭제 결과 메시지 (saved/cleared/overridden_by_env) — submitSmartThingsPat 가 redirect 로 전달 #}
+  {% if st_pat_msg %}
+    <p class="{{ 'muted' if st_pat_msg[0] == 'ok' else 'error' }}">{{ st_pat_msg[1] }}</p>
+  {% endif %}
+
+  <h2>현재 상태</h2>
+  {% if st_token_info.present and st_token_info.source == 'pat-env' %}
+    <p class="error"><strong>임시 PAT 모드 (환경변수)</strong> — <code>.env</code> 의 <code>SMARTTHINGS_PAT</code> 가 OAuth·파일 PAT 보다 우선 사용 중. OAuth 자동 refresh 비활성. OAuth 로 전환하려면 환경변수를 비우고 재시작.</p>
+    <ul><li>token: <code>{{ st_token_info.access_token_masked }}</code></li></ul>
+  {% elif st_token_info.present and st_token_info.source == 'pat-file' %}
+    <p class="error"><strong>임시 PAT 모드 (파일 입력)</strong> — admin 이 저장한 PAT 가 OAuth 보다 우선 사용 중. 자동 refresh 비활성 — 만료 시 새 PAT 로 교체하거나 아래 "PAT 삭제" 후 OAuth 로 복귀.</p>
+    <ul>
+      <li>token: <code>{{ st_token_info.access_token_masked }}</code></li>
+      {% if st_token_info.saved_at %}<li>저장 일자: {{ st_token_info.saved_at }} KST</li>{% endif %}
+    </ul>
+    <form onsubmit="return clearSmartThingsPat(event)" class="inline">
+      <button type="submit" class="danger">PAT 삭제</button>
+    </form>
+  {% elif st_token_info.present %}
+    <ul>
+      <li>access_token: <code>{{ st_token_info.access_token_masked }}</code> (source: OAuth)</li>
+      <li>최근 갱신: {{ st_token_info.refreshed_at }} KST</li>
+      <li>만료 예정: {{ st_token_info.expires_at }} KST
+        {% if st_token_info.expired %}<span class="error">(만료됨 — 다음 호출 시 자동 갱신)</span>{% endif %}
+      </li>
+    </ul>
+  {% else %}
+    <p class="error">SmartThings 가 연결되어 있지 않습니다. 아래에서 OAuth 연결 또는 PAT 입력 중 하나로 진행하세요.</p>
+  {% endif %}
+
+  <h2>{{ "OAuth 재연결" if st_token_info.present else "OAuth 연결" }}</h2>
+  <p>
+    <a href="/admin/smartthings/oauth/start" class="button">SmartThings OAuth 연결</a>
+  </p>
+  <p class="muted">사전 준비: SmartThings Developer Workspace 에서 OAuth-In 클라이언트를 생성하고
+    <code>.env</code> 의 <code>SMARTTHINGS_CLIENT_ID</code> / <code>SMARTTHINGS_CLIENT_SECRET</code> /
+    <code>SMARTTHINGS_OAUTH_REDIRECT_URI</code> 를 설정해야 합니다. redirect_uri 는 클라이언트 등록값과
+    정확히 일치해야 합니다.</p>
+
+  <h2>임시 PAT 입력 (stopgap)</h2>
+  <p class="muted">OAuth 클라이언트 준비 전 빠르게 운영하고 싶을 때 사용. <a href="https://account.smartthings.com/tokens" target="_blank" rel="noopener">account.smartthings.com</a> 에서 PAT 발급 후 아래 입력. 저장 즉시 활성화되며 재시작 불필요. refresh 흐름 없음 — 만료 시 새 PAT 로 교체. (환경변수 <code>SMARTTHINGS_PAT</code> 가 설정돼 있으면 그 값이 우선되고 이 폼은 무시됩니다.)</p>
+  <form id="st-pat-form" onsubmit="return submitSmartThingsPat(event)">
+    <label>SmartThings Personal Access Token
+      <input name="pat" required size="60" autocomplete="off" />
+    </label>
+    <button type="submit">저장 후 검증</button>
+  </form>
+  <p id="st-pat-result" class="muted"></p>
+</section>
+{% endblock %}

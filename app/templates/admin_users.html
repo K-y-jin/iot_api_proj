@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}관리: 사용자 · IoT{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>사용자 관리</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+
+  <h2>현재 사용자</h2>
+  <table>
+    <thead><tr><th>id</th><th>username</th><th>admin</th><th>created_at</th></tr></thead>
+    <tbody>
+      {% for u in users %}
+        <tr><td>{{ u.id }}</td><td>{{ u.username }}</td><td>{{ "yes" if u.is_admin else "" }}</td><td>{{ u.created_at }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <h2>신규 사용자 추가</h2>
+  <form method="post" action="/admin/users">
+    <label>아이디 <input name="username" required /></label>
+    <label>비밀번호 <input name="password" type="password" required /></label>
+    <label><input type="checkbox" name="is_admin" value="true" /> 관리자 권한</label>
+    <button type="submit">추가</button>
+  </form>
+</section>
+{% endblock %}

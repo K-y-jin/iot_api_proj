@@ -1,0 +1,21 @@
+# 모든 텍스트 파일은 저장소에 LF로 저장 (OS/개인 git 설정 무관하게 일관성 유지)
+* text=auto eol=lf
+
+# Windows 전용 스크립트는 CRLF 유지 (실행 호환성)
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 바이너리 (변환 금지)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+*.xlsx binary
+*.xls binary

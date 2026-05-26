@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}대시보드 · IoT 데이터 수집{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>대시보드</h1>
+  <div class="kpi-row">
+    <div class="kpi"><div class="kpi-label">활성 장치</div><div class="kpi-value">{{ active_count }}</div></div>
+    <div class="kpi"><div class="kpi-label">어제({{ yesterday }}) 성공</div><div class="kpi-value">{{ yesterday_ok }}</div></div>
+    <div class="kpi"><div class="kpi-label">어제 실패</div><div class="kpi-value">{{ yesterday_fail }}</div></div>
+    <div class="kpi"><div class="kpi-label">누적 용량</div><div class="kpi-value">{{ total_bytes | human_bytes }}</div></div>
+  </div>
+</section>
+
+<section class="card">
+  <h2>예정된 스케줄 작업</h2>
+  {% if jobs %}
+    <table>
+      <thead><tr><th>id</th><th>이름</th><th>다음 실행</th></tr></thead>
+      <tbody>
+        {% for j in jobs %}
+          <tr><td>{{ j.id }}</td><td>{{ j.name }}</td><td>{{ j.next_run }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">스케줄러가 아직 시작되지 않았습니다.</p>
+  {% endif %}
+</section>
+{% endblock %}

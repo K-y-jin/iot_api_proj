@@ -1,0 +1,57 @@
+# ─────────────────────── 비밀값 / 토큰 (DESIGN.md §14) ───────────────────────
+# .env 와 그 변형은 모두 제외, .env.example 만 예시로 커밋.
+.env
+.env.*
+!.env.example
+
+# Aqara / SmartThings 토큰 — 절대 커밋 금지 (CLAUDE.md §2.5).
+tokens.json
+tokens_smartthings.json
+tokens_smartthings_pat.json
+# atomic write 중 임시 파일 (token_manager.save 가 .tmp → rename).
+*.tmp
+
+# ─────────────────────── DB / 수집 데이터 (DESIGN.md §5) ───────────────────────
+app.db
+app.db-journal
+app.db-wal
+app.db-shm
+
+# 일일 수집 CSV (대용량, 운영 환경별로 다름).
+data/
+# 예제 / 변환 원본 데이터 (개인 정보 포함 가능).
+data_example/
+
+# ─────────────────────── Python ───────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+
+# 가상환경
+.venv/
+venv/
+env/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ─────────────────────── IDE / OS ───────────────────────
+.vscode/
+.idea/
+# Claude Code 로컬 설정 (개인 권한 허용 목록 등 — 공유하지 않음).
+.claude/
+*.swp
+*~
+.DS_Store
+Thumbs.db

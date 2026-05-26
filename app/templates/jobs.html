@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}작업 이력 · IoT{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>API 작업 이력</h1>
+  <p class="muted">최근 500건. (DESIGN.md §7.2)</p>
+  <table>
+    <thead>
+      <tr>
+        <th>id</th><th>Device ID</th><th>Bundle</th><th>수집 날짜</th>
+        <th>상태</th><th>길이</th><th>용량</th>
+        <th>요청 시작</th><th>수신 종료</th><th>오류</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+        <tr>
+          <td>{{ j.id }}</td>
+          <td><code>{{ j.device_id }}</code></td>
+          <td><code>{{ j.bundle_key }}</code></td>
+          <td>{{ j.target_date }}</td>
+          <td class="status-{{ j.status }}">{{ j.status }}</td>
+          <td>{{ j.record_count if j.record_count is not none else "" }}</td>
+          <td title="{{ '{:,}'.format(j.file_size_bytes) ~ ' B' if j.file_size_bytes else '' }}">{{ j.file_size_bytes | human_bytes }}</td>
+          <td>{{ j.started_at or "" }}</td>
+          <td>{{ j.finished_at or "" }}</td>
+          <td class="error-cell">{{ j.error_message or "" }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

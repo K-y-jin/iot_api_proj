@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}{{ device.alias or device.device_id }} 타임라인 · IoT{% endblock %}
+{% block content %}
+{# 디바이스 활동 타임라인 (DISPLAY.md §3 레이아웃). 외부 차트 라이브러리 없이 SVG로 직접 렌더. #}
+
+{# 좌표 상수: 템플릿 산식 단순화를 위해 매크로 변수로 보존 #}
+{% set TRACK_W = svg_width %}
+{% set TRACK_H = svg_height %}
+{% set SEC = seconds_per_day %}
+
+<section class="card">
+  <h1>{{ device_type.display_name_ko }} <span class="muted">— {{ device.alias or "(별명 없음)" }}</span></h1>
+  <p class="muted">
+    Device ID: <code>{{ device.device_id }}</code>
+    {% if device.install_location %} · 설치: {{ device.install_location }}{% endif %}
+    · 모델: <code>{{ device_type.model }}</code>
+  </p>
+  <p>
+    <a href="/data">← 데이터 현황</a>
+    &nbsp;|&nbsp;
+    <a href="/data/{{ device.device_id }}/{{ primary_bundle_key }}">파일 목록 보기</a>
+  </p>
+
+  {# 기간 선택 폼 #}
+  <form method="get" action="/display/{{ device.device_id }}" class="display-form">
+    <label>마지막 일자 (to)
+      <input type="date" name="to" value="{{ to }}" max="{{ today }}" />
+    </label>
+    <label>표시 일수
+      <select name="days">
+        {% for n in range(1, max_days + 1) %}
+          <option value="{{ n }}" {% if n == days %}selected{% endif %}>{{ n }}일</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit">적용</button>
+  </form>
+
+  {# 범례 — 단일/그룹 화면 공용 partial (Bar/Point/Plot 어휘 + device_type 별 항목) #}
+  {% include "_timeline_legend.html" %}
+</section>
+
+<section class="card timeline-card">
+  {# 단일 디바이스 타임라인 SVG (partial). 그룹 페이지(display_group.html)와 동일 partial 사용. #}
+  {% include "_device_timeline.html" %}
+</section>
+{% endblock %}

@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}데이터 현황 · IoT{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>데이터 수집 현황</h1>
+  <p class="muted">device × bundle 단위 집계. 행 클릭 시 일자별 파일로 이동. (DESIGN.md §7.3)</p>
+  {% if items %}
+    {# 설치 장소 필터 — items 의 install_location 고유값으로 드롭다운 자동 생성.
+       devices.html 과 동일 패턴. "(미지정)" 옵션은 빈 install_location 행을 표시. #}
+    {% set data_locations = items | map(attribute='install_location')
+                                   | reject('none') | reject('equalto', '')
+                                   | unique | list | sort %}
+    <p>
+      <label>설치 장소
+        <select id="data-location-filter" onchange="filterDataByLocation(this.value)">
+          <option value="">(전체)</option>
+          {% for loc in data_locations %}
+            <option value="{{ loc }}">{{ loc }}</option>
+          {% endfor %}
+          <option value="__none__">(미지정)</option>
+        </select>
+      </label>
+      <span class="muted">표시: <span id="data-visible-count">{{ items|length }}</span> / {{ items|length }}</span>
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th>기기 종류</th><th>별명</th><th>설치 장소</th>
+          <th>Device ID</th><th>Bundle</th>
+          <th>파일 수</th><th>총 용량</th>
+          <th>최초 수집</th><th>최종 수집</th><th>총 길이</th>
+          <th>다운로드</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for it in items %}
+          <tr class="data-row" data-install-location="{{ it.install_location or '' }}">
+            <td>{{ device_types[it.device_type].display_name_ko if it.device_type in device_types else it.device_type or "(deleted)" }}</td>
+            <td>{{ it.alias or "" }}</td>
+            <td>{{ it.install_location or "" }}</td>
+            {# device_id 클릭 시 디스플레이 탭으로 (DISPLAY.md §1, §8). 파일 목록은 보조 링크. #}
+            <td>
+              <a href="/display/{{ it.device_id }}"><code>{{ it.device_id }}</code></a>
+              <a href="/data/{{ it.device_id }}/{{ it.bundle_key }}" class="muted" title="파일 목록">파일</a>
+            </td>
+            <td><code>{{ it.bundle_key }}</code></td>
+            <td>{{ it.file_count }}</td>
+            <td title="{{ '{:,}'.format(it.total_bytes) }} B">{{ it.total_bytes | human_bytes }}</td>
+            <td>{{ it.first_date }}</td>
+            <td>{{ it.last_date }}</td>
+            <td>{{ "{:,}".format(it.total_records) }}</td>
+            <td>
+              {# CSV 다운로드는 로그인 필수 (DESIGN.md §6.3). 비로그인 시 폼을 숨기고 안내. #}
+              {% if user %}
+                <form class="inline" onsubmit="return bundleDownload(event, '{{ it.device_id }}', '{{ it.bundle_key }}')">
+                  <input type="date" name="from" value="{{ it.first_date }}" required />
+                  ~
+                  <input type="date" name="to" value="{{ it.last_date }}" required />
+                  <select name="format">
+                    <option value="zip">zip</option>
+                    <option value="concat">concat CSV</option>
+                  </select>
+                  <button type="submit">받기</button>
+                </form>
+              {% else %}
+                <a href="/login" class="muted">로그인 후 다운로드</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">수집된 데이터가 없습니다. 장치 등록 후 일일 수집을 기다리거나 admin이 수동 트리거하세요.</p>
+  {% endif %}
+</section>
+{% endblock %}

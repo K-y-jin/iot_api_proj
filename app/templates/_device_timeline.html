@@ -1,0 +1,193 @@
+{# 디바이스 활동 타임라인 SVG 블록 — DISPLAY.md §3 레이아웃.
+
+   호출자는 컨텍스트에 다음을 제공해야 한다 (display.py, display_group.py 동일):
+     device           : devices 테이블 행 dict
+     device_type      : DEVICE_TYPES[device.device_type] DeviceType
+     day_rows         : list[dict] (_build_day_rows 결과; track/kind/intervals/points 포함)
+     svg_width        : SVG viewBox 폭 (예: 1000)
+     svg_height       : SVG viewBox 높이 (예: 28)
+     seconds_per_day  : 86400
+
+   외부 차트 라이브러리 없이 SVG로 직접 렌더 (CLAUDE.md §2.3 의존성 최소화).
+   그룹 화면(/display/group/{id})은 멤버 디바이스마다 이 partial 을 한 번씩 include 한다.
+#}
+{% set TRACK_W = svg_width %}
+{% set TRACK_H = svg_height %}
+{% set SEC = seconds_per_day %}
+
+<div class="timeline">
+  {# 상단 X축 시각 레이블 #}
+  <div class="time-axis-row">
+    <div class="day-label-col"></div>
+    <div class="track-col">
+      <svg viewBox="0 0 {{ TRACK_W }} 18" preserveAspectRatio="none" class="time-axis">
+        {% for h in [0, 3, 6, 9, 12, 15, 18, 21, 24] %}
+          {% set x = (h * 3600 * TRACK_W) // SEC %}
+          <text x="{{ x }}" y="14" font-size="11" text-anchor="{% if h == 0 %}start{% elif h == 24 %}end{% else %}middle{% endif %}" fill="#475569">{{ h }}</text>
+        {% endfor %}
+      </svg>
+    </div>
+  </div>
+
+  {# 일자별 행 #}
+  {% for day in day_rows %}
+    {% set track = day.tracks[0] %}
+    <div class="day-row {% if day.is_today %}today{% endif %}">
+      <div class="day-label-col">
+        <div class="day-date">{{ day.date[5:] }} <span class="weekday">({{ day.weekday_ko }})</span></div>
+      </div>
+      <div class="track-col">
+        <svg viewBox="0 0 {{ TRACK_W }} {{ TRACK_H }}" preserveAspectRatio="none" class="track">
+          <rect x="0" y="0" width="{{ TRACK_W }}" height="{{ TRACK_H }}" fill="var(--bg-track)" />
+          {% for h in [3, 6, 9, 12, 15, 18, 21] %}
+            {% set gx = (h * 3600 * TRACK_W) // SEC %}
+            <line x1="{{ gx }}" y1="0" x2="{{ gx }}" y2="{{ TRACK_H }}" stroke="var(--grid-color)" stroke-width="1" />
+          {% endfor %}
+
+          {% set bar_var = ('var(--motion-color)' if track.kind == 'motion'
+                            else 'var(--door-open-color)' if track.kind == 'door'
+                            else 'var(--vibration-color)' if track.kind == 'vibration'
+                            else 'var(--switch-long-color)' if track.kind == 'switch'
+                            else 'var(--motion-color)' if track.kind == 'st_motion'
+                            else 'var(--vibration-color)' if track.kind == 'vibration_aq1'
+                            else '#9ca3af') %}
+          {% set tick_var = ('var(--knock-color)' if track.kind == 'vibration'
+                             else 'var(--switch-event-color)' if track.kind == 'switch'
+                             else 'var(--vibration-aq1-color)' if track.kind == 'vibration_aq1'
+                             else 'var(--lux-tick-color)' if track.kind == 'st_motion'
+                             else '#9ca3af') %}
+
+          {# 온습도 plot — 점/막대 대신 두 polyline (이중축 자동 Y 범위). DISPLAY.md §4.6 #}
+          {% if track.kind == 'temp_humi_plot' and track.series %}
+            {% set s = track.series %}
+            {% set y_top = 4 %}
+            {% set y_bot = TRACK_H - 4 %}
+            {% set y_h = y_bot - y_top %}
+            {% if s.temperature %}
+              {% set t_span = (s.temp_max - s.temp_min) or 1 %}
+              <polyline fill="none" stroke="var(--temp-tick-color)" stroke-width="1.5" points="{% for at, v in s.temperature %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - s.temp_min) / t_span) * 10)|round|int / 10 }} {% endfor %}">
+                <title>온도 (좌측 축, {{ '%.1f'|format(s.temp_min) }}~{{ '%.1f'|format(s.temp_max) }}°C, 샘플 {{ s.temperature|length }}개)</title>
+              </polyline>
+              {# 관측 지점 마커 — 각 측정값마다 작은 주황색 원 (DISPLAY.md §4.6) #}
+              {% for at, v in s.temperature %}
+                <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - s.temp_min) / t_span) * 10)|round|int / 10 }}" r="1.8" fill="#f97316">
+                  <title>{{ at[11:] }} · {{ '%.1f'|format(v) }}°C</title>
+                </circle>
+              {% endfor %}
+              {# 좌측 Y 축 라벨 — 온도 범위 (트랙 안쪽 위·아래) #}
+              <text x="2" y="9" font-size="9" fill="var(--temp-tick-color)" text-anchor="start">{{ '%.1f'|format(s.temp_max) }}°</text>
+              <text x="2" y="{{ TRACK_H - 2 }}" font-size="9" fill="var(--temp-tick-color)" text-anchor="start">{{ '%.1f'|format(s.temp_min) }}°</text>
+            {% endif %}
+            {% if s.humidity %}
+              {% set h_span = (s.humi_max - s.humi_min) or 1 %}
+              <polyline fill="none" stroke="var(--humi-tick-color)" stroke-width="1.5" stroke-dasharray="4,2" points="{% for at, v in s.humidity %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - s.humi_min) / h_span) * 10)|round|int / 10 }} {% endfor %}">
+                <title>습도 (우측 축, {{ '%.1f'|format(s.humi_min) }}~{{ '%.1f'|format(s.humi_max) }}%RH, 샘플 {{ s.humidity|length }}개)</title>
+              </polyline>
+              {# 관측 지점 마커 — 습도는 하늘색 (온도·lux 주황과 구분) #}
+              {% for at, v in s.humidity %}
+                <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - s.humi_min) / h_span) * 10)|round|int / 10 }}" r="1.8" fill="#38bdf8">
+                  <title>{{ at[11:] }} · {{ '%.1f'|format(v) }}%RH</title>
+                </circle>
+              {% endfor %}
+              {# 우측 Y 축 라벨 — 습도 범위 #}
+              <text x="{{ TRACK_W - 2 }}" y="9" font-size="9" fill="var(--humi-tick-color)" text-anchor="end">{{ '%.0f'|format(s.humi_max) }}%</text>
+              <text x="{{ TRACK_W - 2 }}" y="{{ TRACK_H - 2 }}" font-size="9" fill="var(--humi-tick-color)" text-anchor="end">{{ '%.0f'|format(s.humi_min) }}%</text>
+            {% endif %}
+          {% endif %}
+
+          {% for iv in track.intervals %}
+            {% set sx = (display_seconds(iv.start) * TRACK_W) // SEC %}
+            {% set ex = (display_seconds(iv.end) * TRACK_W) // SEC %}
+            {% set w = (ex - sx) if (ex - sx) > 0 else 1 %}
+            <rect x="{{ sx }}" y="4" width="{{ w }}" height="{{ TRACK_H - 8 }}" fill="{{ bar_var }}" rx="2">
+              <title>{{ iv.start[11:] }} – {{ iv.end[11:] }}{% if track.kind == 'motion' %} (이벤트 {{ iv.event_count }}개){% endif %}{% if iv.truncated_left %} ← 전날 이어짐{% endif %}{% if iv.truncated_right %} → 다음날 이어짐{% endif %}</title>
+            </rect>
+            {% if iv.truncated_left %}
+              <text x="{{ sx + 2 }}" y="{{ TRACK_H // 2 + 4 }}" font-size="10" fill="#fff">←</text>
+            {% endif %}
+            {% if iv.truncated_right %}
+              <text x="{{ ex - 8 }}" y="{{ TRACK_H // 2 + 4 }}" font-size="10" fill="#fff">→</text>
+            {% endif %}
+          {% endfor %}
+
+          {% for p in track.points %}
+            {% set kx = (display_seconds(p.at) * TRACK_W) // SEC %}
+            {# point.color 가 채워져 있으면 이벤트 코드별 색상 사용 (DISPLAY.md §4.3/§4.5),
+               아니면 트랙 기본 tick 색상으로 fallback. #}
+            <line x1="{{ kx }}" y1="0" x2="{{ kx }}" y2="8" stroke="{{ p.color or tick_var }}" stroke-width="2">
+              <title>{{ p.label or '이벤트' }} {{ p.at[11:] }}</title>
+            </line>
+          {% endfor %}
+
+          {# SmartThings lux line plot — motion 막대 위에 노란 polyline 오버레이 (DISPLAY.md §4.1).
+             막대보다 나중에 그려 선이 막대 위로 보이게 한다. 우측에 lux 범위 라벨. #}
+          {% if track.kind == 'st_motion' and track.lux_series and track.lux_series.lux %}
+            {% set lx = track.lux_series %}
+            {% set y_top = 4 %}
+            {% set y_bot = TRACK_H - 4 %}
+            {% set y_h = y_bot - y_top %}
+            {% set lux_span = (lx.lux_max - lx.lux_min) or 1 %}
+            <polyline fill="none" stroke="var(--lux-tick-color)" stroke-width="1.5" points="{% for at, v in lx.lux %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - lx.lux_min) / lux_span) * 10)|round|int / 10 }} {% endfor %}">
+              <title>조도 lux ({{ '%.0f'|format(lx.lux_min) }}~{{ '%.0f'|format(lx.lux_max) }}, 샘플 {{ lx.lux|length }}개)</title>
+            </polyline>
+            {# 관측 지점 마커 — 각 lux 측정값마다 작은 주황색 원 #}
+            {% for at, v in lx.lux %}
+              <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - lx.lux_min) / lux_span) * 10)|round|int / 10 }}" r="1.8" fill="#f97316">
+                <title>{{ at[11:] }} · {{ '%.0f'|format(v) }}lx</title>
+              </circle>
+            {% endfor %}
+            {# 우측 Y 범위 라벨 — 노란 선은 흰 배경에서 흐리므로 텍스트는 회색 + 'lx' 접미 #}
+            <text x="{{ TRACK_W - 2 }}" y="9" font-size="9" fill="#475569" text-anchor="end">{{ '%.0f'|format(lx.lux_max) }}lx</text>
+            <text x="{{ TRACK_W - 2 }}" y="{{ TRACK_H - 2 }}" font-size="9" fill="#475569" text-anchor="end">{{ '%.0f'|format(lx.lux_min) }}lx</text>
+          {% endif %}
+        </svg>
+      </div>
+      <div class="day-meta">
+        {% if not track.has_csv %}
+          <span class="meta-tag muted">수집 없음</span>
+        {% elif track.kind == 'temp_humi_plot' %}
+          {# series 키는 단일 디바이스 화면에서만 채워짐. 그룹 합산 트랙은 series 가 없으므로
+             안전하게 빈 시계열로 폴백 (그룹 합산은 plot 의미가 모호해 측정 없음 처리). #}
+          {% if track.series %}
+            {% set s = track.series %}
+            {% if (s.temperature|length + s.humidity|length) == 0 %}
+              <span class="meta-tag muted">측정 없음</span>
+            {% else %}
+              <span class="meta-tag">T {{ s.temperature|length }} · H {{ s.humidity|length }}</span>
+            {% endif %}
+          {% else %}
+            <span class="meta-tag muted">측정 없음</span>
+          {% endif %}
+        {% elif track.kind == 'st_motion' %}
+          {# motion 막대(Bar) + lux plot 샘플 수. lux_series 가 없는 그룹 합산 트랙은 0 으로 폴백. #}
+          {% set lux_n = (track.lux_series.lux|length) if track.lux_series else 0 %}
+          {% if track.intervals|length == 0 and lux_n == 0 %}
+            <span class="meta-tag muted">이벤트 없음</span>
+          {% else %}
+            <span class="meta-tag">{% if track.intervals %}Bar {{ track.intervals|length }}{% endif %}{% if track.intervals and lux_n %} · {% endif %}{% if lux_n %}lux {{ lux_n }}{% endif %}</span>
+          {% endif %}
+        {% elif track.intervals|length == 0 and track.points|length == 0 %}
+          <span class="meta-tag muted">이벤트 없음</span>
+        {% else %}
+          <span class="meta-tag">{% if track.intervals %}Bar {{ track.intervals|length }}{% endif %}{% if track.intervals and track.points %} · {% endif %}{% if track.points %}Point {{ track.points|length }}{% endif %}</span>
+        {% endif %}
+        {% if track.job_status == 'failed' %}
+          <a class="meta-tag failed" href="/jobs">수집 실패</a>
+        {% endif %}
+      </div>
+    </div>
+  {% endfor %}
+
+  {# 하단 X축 시각 레이블 (반복) #}
+  <div class="time-axis-row">
+    <div class="day-label-col"></div>
+    <div class="track-col">
+      <svg viewBox="0 0 {{ TRACK_W }} 18" preserveAspectRatio="none" class="time-axis">
+        {% for h in [0, 3, 6, 9, 12, 15, 18, 21, 24] %}
+          {% set x = (h * 3600 * TRACK_W) // SEC %}
+          <text x="{{ x }}" y="14" font-size="11" text-anchor="{% if h == 0 %}start{% elif h == 24 %}end{% else %}middle{% endif %}" fill="#475569">{{ h }}</text>
+        {% endfor %}
+      </svg>
+    </div>
+  </div>
+</div>

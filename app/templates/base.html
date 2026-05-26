@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}IoT 데이터 수집 시스템{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body data-is-admin="{{ '1' if user and user.is_admin else '0' }}">
+  <header class="topbar">
+    <a href="/" class="brand">IoT 데이터 수집</a>
+    <nav>
+      <a href="/devices">장치</a>
+      <a href="/data">데이터 현황</a>
+      <a href="/jobs">작업 이력</a>
+      {% if user and user.is_admin %}
+        <a href="/admin/token">관리: 토큰</a>
+        <a href="/admin/users">관리: 사용자</a>
+      {% endif %}
+    </nav>
+    <div class="user-area">
+      {% if user %}
+        <span class="who">{{ user.username }}{% if user.is_admin %} (admin){% endif %}</span>
+        <form method="post" action="/logout" class="inline">
+          <button type="submit">로그아웃</button>
+        </form>
+      {% else %}
+        <a href="/login">로그인</a>
+      {% endif %}
+    </div>
+  </header>
+
+  {# 시스템 경고 알림 배너 (DESIGN.md §7.6) #}
+  <div id="alert-banner">
+    {% for a in active_alerts %}
+      <div class="alert alert-{{ a.level }}" data-alert-id="{{ a.id }}" data-alert-code="{{ a.code }}">
+        <strong>[{{ a.code }}]</strong> {{ a.message }}
+        {% if user %}
+          <button class="dismiss" type="button" onclick="dismissAlert({{ a.id }})">✕</button>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+
+  {# 캐시 무효화: 그룹(2026-05-12)/SmartThings PAT UI(2026-05-26) 등 신규 핸들러 추가 시
+     수동 증가시켜 브라우저가 옛 app.js 캐시를 사용하지 않도록 한다. #}
+  <script src="/static/app.js?v=9"></script>
+</body>
+</html>

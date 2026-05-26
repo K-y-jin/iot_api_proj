@@ -1,0 +1,136 @@
+/* Aqara 데이터 수집 시스템 기본 스타일 */
+:root {
+  /* DISPLAY.md §6 색상 팔레트 — 한 곳에서 변경 가능 */
+  --motion-color:        #3b82f6;  /* 파랑   — motion bar */
+  --door-open-color:     #f59e0b;  /* 주황   — door open bar */
+  --vibration-color:     #10b981;  /* 녹색   — vibration_t1 move bar */
+  --knock-color:         #ef4444;  /* 빨강   — vibration_t1 knock tick */
+  --switch-long-color:   #8b5cf6;  /* 보라   — switch_t1 long press bar */
+  --switch-event-color:  #06b6d4;  /* 청록   — switch_t1 click/shake tick */
+  --vibration-aq1-color: #ec4899;  /* 분홍   — vibration_aq1 event tick (기본/legend) */
+  --lux-tick-color:      #facc15;  /* 노랑   — SmartThings st_aqara_motion_p2 illuminance tick (DESIGN.md §15) */
+  --temp-tick-color:     #dc2626;  /* 빨강   — temp_humi_t1 온도 측정 tick (DISPLAY.md §4.6) */
+  --humi-tick-color:     #2563eb;  /* 파랑   — temp_humi_t1 습도 측정 tick (DISPLAY.md §4.6) */
+  /* 관측 지점 마커는 SVG circle 에 #f97316 직접 지정 (_device_timeline.html). CSS 변수를
+     쓰지 않는 이유: 신규 변수는 캐시된 구버전 style.css 에서 미정의 → fill 이 검정 폴백됨. */
+  /* vibration_aq1 코드별 tick 색상 (DEVICE.md §6.2 / DISPLAY.md §4.5).
+     7개 코드를 시각적으로 구분해 호버 없이도 종류 추정이 가능하도록 한다. */
+  --vibration-aq1-0-color: #b91c1c;  /* 두드림(보안) - 진빨강 */
+  --vibration-aq1-1-color: #f59e0b;  /* 정지 후 트리거 - 주황 */
+  --vibration-aq1-2-color: #2563eb;  /* 기울임 - 파랑 */
+  --vibration-aq1-3-color: #7c3aed;  /* 자유낙하 - 보라 */
+  --vibration-aq1-4-color: #059669;  /* 닫힘 학습 - 초록 */
+  --vibration-aq1-5-color: #db2777;  /* 들어 올림 - 핑크 */
+  --vibration-aq1-6-color: #0891b2;  /* 세 번 두드림 - 청록 */
+  /* vibration_t1 knock_event 값별 tick 색상 (UpgoPlus xlsx 관측 {1,255}).
+     1 = 두드림 시작/감지, 255 = 해지 — move_detect 와 유사한 on/off 페어. */
+  --knock-1-color:   #dc2626;  /* 두드림 ON  - 빨강 */
+  --knock-255-color: #6b7280;  /* 두드림 해지 - 회색 */
+  --grid-color:          #e5e7eb;
+  --bg-track:            #f9fafb;
+  --today-bg:            #fef3c7;
+}
+* { box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", sans-serif;
+       margin: 0; background: #f5f6f8; color: #222; line-height: 1.5; }
+
+/* Top bar */
+.topbar { display: flex; align-items: center; gap: 1rem; padding: .75rem 1.25rem;
+          background: #1e293b; color: #fff; }
+.topbar .brand { color: #fff; font-weight: 700; text-decoration: none; }
+.topbar nav { flex: 1; display: flex; gap: 1rem; }
+.topbar nav a { color: #cbd5e1; text-decoration: none; }
+.topbar nav a:hover { color: #fff; }
+.topbar .user-area { display: flex; align-items: center; gap: .5rem; }
+.topbar .user-area a, .topbar .user-area .who { color: #cbd5e1; }
+.topbar form.inline { display: inline; }
+.topbar button { background: #475569; color: #fff; border: 0; padding: .25rem .75rem;
+                 border-radius: 4px; cursor: pointer; }
+
+/* Alert banner */
+#alert-banner .alert { padding: .75rem 1rem; margin: 0; border-bottom: 1px solid rgba(0,0,0,.05);
+                       display: flex; justify-content: space-between; align-items: center; }
+.alert-error   { background: #fee2e2; color: #7f1d1d; }
+.alert-warning { background: #fef3c7; color: #78350f; }
+.alert-info    { background: #dbeafe; color: #1e3a8a; }
+.alert .dismiss { background: transparent; border: 0; cursor: pointer; font-size: 1rem; color: inherit; }
+
+/* Main / cards */
+main { padding: 1.5rem; max-width: 1400px; margin: 0 auto; }
+.card { background: #fff; padding: 1.25rem 1.5rem; margin-bottom: 1.25rem;
+        border-radius: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.card.narrow { max-width: 420px; margin: 2rem auto; }
+.card h1 { margin-top: 0; }
+.card h2 { margin-top: 1.5rem; border-bottom: 1px solid #e5e7eb; padding-bottom: .25rem; }
+
+/* Forms */
+form { display: flex; flex-wrap: wrap; gap: .75rem; align-items: flex-end; }
+form label { display: flex; flex-direction: column; font-size: .85rem; color: #475569; }
+form input, form select { padding: .4rem .6rem; border: 1px solid #cbd5e1; border-radius: 4px;
+                          font-size: .95rem; }
+form button { padding: .5rem 1rem; background: #2563eb; color: #fff; border: 0;
+              border-radius: 4px; cursor: pointer; }
+form button.danger { background: #dc2626; }
+form.inline { display: inline-flex; gap: .25rem; }
+
+/* 링크를 버튼처럼 — SmartThings OAuth 연결 등 (admin_token.html) */
+a.button { display: inline-block; padding: .5rem 1rem; background: #2563eb; color: #fff;
+           border-radius: 4px; text-decoration: none; }
+a.button:hover { background: #1d4ed8; }
+
+/* Table */
+table { width: 100%; border-collapse: collapse; margin-top: .5rem; font-size: .92rem; }
+th, td { padding: .5rem .6rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
+th { background: #f1f5f9; }
+code { background: #f1f5f9; padding: 1px 4px; border-radius: 3px; font-size: .9em; }
+.status-success { color: #15803d; font-weight: 600; }
+.status-failed  { color: #b91c1c; font-weight: 600; }
+.status-running { color: #c2410c; font-weight: 600; }
+.error-cell { color: #b91c1c; max-width: 320px; }
+.error { color: #b91c1c; font-weight: 600; }
+.muted { color: #64748b; font-size: .9rem; }
+.hub-badge { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: .75rem; font-weight: 600; }
+.hub-aqara       { background: #dbeafe; color: #1e3a8a; }   /* 파랑 — Aqara */
+.hub-smartthings { background: #dcfce7; color: #14532d; }   /* 초록 — SmartThings */
+
+/* Display (디바이스 활동 타임라인, DISPLAY.md §3) */
+.display-form { margin-top: .75rem; }
+.legend { margin-top: .75rem; display: flex; gap: 1.25rem; flex-wrap: wrap; font-size: .9rem; }
+.legend-item { display: inline-flex; align-items: center; gap: .35rem; }
+.legend-item .swatch { display: inline-block; width: 20px; height: 12px; border-radius: 2px; }
+.legend-item .swatch.motion       { background: var(--motion-color); }
+.legend-item .swatch.door         { background: var(--door-open-color); }
+.legend-item .swatch.vibration    { background: var(--vibration-color); }
+.legend-item .swatch.switch-long  { background: var(--switch-long-color); }
+.legend-item .swatch.knock-tick           { background: transparent; border-left: 2px solid var(--knock-color);         height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.switch-event-tick    { background: transparent; border-left: 2px solid var(--switch-event-color);  height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.vibration-aq1-tick   { background: transparent; border-left: 2px solid var(--vibration-aq1-color); height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.vibration-aq1-3      { background: transparent; border-left: 2px solid var(--vibration-aq1-3-color); height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.vibration-aq1-4      { background: transparent; border-left: 2px solid var(--vibration-aq1-4-color); height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.lux-tick             { background: transparent; border-left: 2px solid var(--lux-tick-color);      height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.temp-tick            { background: transparent; border-left: 2px solid var(--temp-tick-color);     height: 14px; width: 6px; border-radius: 0; }
+.legend-item .swatch.humi-tick            { background: transparent; border-left: 2px solid var(--humi-tick-color);     height: 14px; width: 6px; border-radius: 0; }
+
+.timeline-card { padding: 1rem 1.25rem; }
+.timeline { width: 100%; }
+.day-row { display: grid; grid-template-columns: 80px 1fr 140px;
+           align-items: center; gap: .5rem; padding: 4px 0;
+           border-bottom: 1px dashed #f1f5f9; }
+.day-row.today { background: var(--today-bg); border-radius: 4px; padding-left: 4px; padding-right: 4px; }
+.day-label-col { font-size: .85rem; color: #334155; }
+.day-date { font-weight: 600; }
+.day-date .weekday { color: #64748b; font-weight: 400; font-size: .8rem; }
+.track-col { width: 100%; }
+.track { width: 100%; height: 28px; display: block; }
+.time-axis-row { display: grid; grid-template-columns: 80px 1fr 140px;
+                 gap: .5rem; padding: 2px 0; }
+.time-axis { width: 100%; height: 18px; display: block; }
+.day-meta { font-size: .8rem; color: #64748b; display: flex; gap: .35rem; flex-wrap: wrap; align-items: center; }
+.meta-tag { background: #f1f5f9; padding: 1px 6px; border-radius: 3px; }
+.meta-tag.failed { background: #fee2e2; color: #7f1d1d; text-decoration: none; font-weight: 600; }
+
+/* KPI */
+.kpi-row { display: flex; gap: 1rem; flex-wrap: wrap; }
+.kpi { flex: 1; min-width: 180px; background: #f8fafc; padding: 1rem; border-radius: 6px; border: 1px solid #e2e8f0; }
+.kpi-label { font-size: .85rem; color: #64748b; }
+.kpi-value { font-size: 1.75rem; font-weight: 700; margin-top: .25rem; }

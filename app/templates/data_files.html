@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}{{ device_id }} / {{ bundle_key }} · IoT{% endblock %}
+{% block content %}
+<section class="card">
+  <h1><code>{{ device_id }}</code> / <code>{{ bundle_key }}</code></h1>
+  <p><a href="/data">← 데이터 현황으로</a></p>
+  {% if files %}
+    <table>
+      <thead>
+        <tr>
+          <th>수집 날짜</th><th>상태</th><th>길이</th><th>용량</th>
+          <th>요청 시작</th><th>수신 종료</th><th>오류</th><th>다운로드</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in files %}
+          <tr>
+            <td>{{ f.target_date }}</td>
+            <td class="status-{{ f.status }}">{{ f.status }}</td>
+            <td>{{ f.record_count if f.record_count is not none else "" }}</td>
+            <td title="{{ '{:,}'.format(f.file_size_bytes) ~ ' B' if f.file_size_bytes else '' }}">{{ f.file_size_bytes | human_bytes }}</td>
+            <td>{{ f.started_at or "" }}</td>
+            <td>{{ f.finished_at or "" }}</td>
+            <td class="error-cell">{{ f.error_message or "" }}</td>
+            <td>
+              {% if f.status == 'success' %}
+                <a href="/api/data/{{ device_id }}/{{ bundle_key }}/{{ f.target_date }}/download">CSV</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p class="muted">수집 이력이 없습니다.</p>
+  {% endif %}
+</section>
+{% endblock %}
