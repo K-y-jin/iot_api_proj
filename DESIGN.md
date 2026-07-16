@@ -178,10 +178,47 @@ DEVICE_TYPES = {
             },
         ],
     },
+    "smart_plug_eu": {
+        "model": "lumi.plug.maeu01",
+        "display_name": "Smart Plug EU",
+        "display_name_ko": "스마트 플러그 EU",
+        "sampling": "event+periodic",
+        # 단일 wide bundle: on/off 이벤트 + 전력 주기 측정 (motion_lux 와 동일한 혼합 패턴).
+        # aqara plug_status(0/1/2) ↔ smartthings switch(on/off). 전력 컬럼은 양 hub 통일(load_power/cost_energy).
+        # raw 저장 — aqara cost_energy 는 0.001kWh 단위, kWh 환산은 표시 단계에서만 (DEVICE.md §11).
+        # (실제 코드는 bundles_by_hub 로 hub 별 resource id 를 분리 — DEVICE.md §11)
+        "bundles": [
+            {
+                "key": "plug_status",
+                "resources": [
+                    {"id": "4.1.85", "name": "plug_status", "name_ko": "소켓 개폐 상태 (0=꺼짐/1=켜짐/2=토글)"},
+                    {"id": "0.12.85", "name": "load_power", "name_ko": "순시 동작 전력 (W)"},
+                    {"id": "0.13.85", "name": "cost_energy", "name_ko": "누적 소비 전력량 (0.001kWh)"},
+                ],
+                "csv_columns": ["time", "plug_status", "load_power", "cost_energy"],
+            },
+        ],
+    },
+    "water_leak_t1": {
+        "model": "lumi.flood.agl02",
+        "display_name": "Water Leak Sensor T1",
+        "display_name_ko": "누수 센서 T1",
+        "sampling": "event",
+        # door_t1 과 동일한 이진 상태 센서 (aqara only). 1=누수 시작 → 0=정상 복귀 (DEVICE.md §12)
+        "bundles": [
+            {
+                "key": "leak_status",
+                "resources": [
+                    {"id": "3.1.85", "name": "leak_status", "name_ko": "누수 감지 상태 (0=정상/1=누수)"},
+                ],
+                "csv_columns": ["time", "leak_status"],
+            },
+        ],
+    },
 }
 ```
 
-> ℹ️ 현재 코드의 `DEVICE_TYPES` 는 위 7종(+ SmartThings 전용 `motion_and_light_p2`)을 모두 포함한다 (`app/devices.py` 참조). 추가/수정 시 본 절과 [DEVICE.md §0 요약표](DEVICE.md#0-요약표)를 동시에 갱신한다.
+> ℹ️ 위 블록은 aqara 중심 예시다. 실제 코드의 `DEVICE_TYPES` 는 `bundles_by_hub` 구조로 hub(aqara/smartthings)별 bundle 을 분리하며, 위 종류 외에 SmartThings 전용(`motion_and_light_p2`, `motion_and_light_wm`, `temp_humi_wm`)과 `smart_plug_eu`·`water_leak_t1`(둘 다 aqara·smartthings) 를 포함한다 (`app/devices.py` 참조). 추가/수정 시 본 절과 [DEVICE.md §0 요약표](DEVICE.md#0-요약표)를 동시에 갱신한다.
 
 ### 3.2 장치 등록 UX
 사용자는 로그인 후 다음을 입력하여 등록한다.
@@ -218,13 +255,13 @@ aqara_api_proj/
 │   ├── main.py                # FastAPI 앱 진입점, 라우터 등록, 스케줄러 시작 (--dry-run 지원)
 │   ├── config.py              # APPID/KEYID/APPKEY, 경로, 시간대, cron 시간 등 환경값
 │   ├── db.py                  # SQLite 연결, 스키마 초기화 + 마이그레이션 (CREATE TABLE IF NOT EXISTS + _ensure_*)
-│   ├── devices.py             # DEVICE_TYPES 고정 매핑 (Aqara/SmartThings 8종)
+│   ├── devices.py             # DEVICE_TYPES 고정 매핑 (Aqara/SmartThings 12종, hub별 bundles_by_hub)
 │   ├── aqara_client.py        # Aqara API 호출(서명, fetch.resource.history, refreshToken, call_with_auto_refresh)
 │   ├── token_manager.py       # access/refresh 토큰 tokens.json 저장·로드·만료 판단
 │   ├── alerts.py              # system_alerts 헬퍼 (raise/resolve, 동일 code upsert)
 │   ├── collector.py           # 일일 수집 워크플로우 (페이지네이션, wide-join CSV 작성, backfill)
 │   ├── display_extract.py     # 일자별 CSV → interval/point 추출 (DISPLAY.md §4 시각화 규칙)
-│   ├── scheduler.py           # APScheduler 인스턴스 + 3개 cron job (09:00 수집, 03:00 토큰, N분 헬스체크)
+│   ├── scheduler.py           # APScheduler 인스턴스 + 4개 cron job (09:00 수집, 03:00 토큰 갱신, 03:30 job 정리, 매시간 헬스체크/backfill)
 │   ├── auth.py                # 로그인/로그아웃, 세션 의존성, 비밀번호 해싱, admin 시드
 │   ├── routes/
 │   │   ├── __init__.py
@@ -240,6 +277,7 @@ aqara_api_proj/
 │   │   ├── data_files.html    # /data/{device_id}/{bundle_key} 일자별 파일 목록
 │   │   ├── display.html       # /display/{device_id} 단일 디바이스 타임라인 SVG
 │   │   ├── display_group.html # /display/group/{group_id} 그룹 타임라인 (멤버=행)
+│   │   ├── display_location.html # /display/location/{location} 설치 장소별 타임라인 (그룹과 동일 로직)
 │   │   ├── _device_timeline.html  # display.html / display_group.html 공통 트랙 partial
 │   │   ├── jobs.html
 │   │   ├── admin_token.html
@@ -302,7 +340,8 @@ CREATE TABLE devices (
     install_location TEXT,                 -- 설치 장소 (예: '거실', '안방')
     install_date    TEXT,                  -- 설치 날짜 (YYYY-MM-DD, KST)
     alias           TEXT,                  -- 사용자 지정 별명 (선택)
-    enabled         INTEGER NOT NULL DEFAULT 1,
+    enabled         INTEGER NOT NULL DEFAULT 1,   -- 자동 수집(매일 09:00 cron·backfill) 대상 여부
+    manual_enabled  INTEGER NOT NULL DEFAULT 1,   -- 일괄 수동 수집(/api/jobs/bulk_run) 대상 여부 (enabled 와 독립)
     group_id        INTEGER REFERENCES device_groups(id) ON DELETE SET NULL,  -- 소속 그룹 (선택)
     created_by      INTEGER NOT NULL REFERENCES users(id),
     created_by_name TEXT NOT NULL,         -- 등록 시점의 username 스냅샷 (사용자 삭제 시에도 보존)
@@ -318,6 +357,21 @@ CREATE TABLE devices (
 CREATE UNIQUE INDEX idx_devices_active_id
     ON devices(device_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_devices_group ON devices(group_id);
+
+-- 수집 대상 플래그 2종 (독립):
+--   enabled        : 자동 수집 대상. 매일 09:00 cron(collect_yesterday) 과 매시간 backfill
+--                    (collector.list_active_devices → enabled=1) 이 참조.
+--   manual_enabled : 수동 수집 대상. 일괄 수동 수집(/api/jobs/bulk_run →
+--                    collector.list_manual_devices → manual_enabled=1) 만 참조.
+-- ※ hub='smartthings' 디바이스는 자동 수집을 지원하지 않는다(SmartThings 는 CLI subprocess
+--   기반 이력 조회라 무인 cron 안정성이 낮음). 따라서 enabled 는 항상 OFF 로 고정한다:
+--     · 등록(create)·편집(patch)·일괄 ON(bulk_enable) 모두 smartthings 는 enabled=1 을 거부/무시.
+--     · list_active_devices 는 hub='smartthings' 를 backstop 으로 제외.
+--   수동 수집(manual_enabled)은 정상 지원하므로 필요한 기간만 bulk_run 으로 받아온다.
+-- 초기 설계는 enabled 하나가 자동·수동 양쪽 대상을 결정했으나, 운영 중 "자동은 끄되
+-- 특정 기간만 수동으로 받아오고 싶다"(또는 반대) 요구가 생겨 두 축을 분리했다.
+-- 두 플래그 모두 ON/OFF 토글은 device_history 에 기록하지 않는다(누적 가치 낮음 — enabled 정책과 동일).
+-- 기존 DB 마이그레이션 시 manual_enabled 는 그 시점의 enabled 값으로 시드(seed)해 기존 동작을 보존한다.
 
 -- 디바이스 변경/삭제 이력 (수정 적용 직후 스냅샷 + 삭제 이벤트 기록).
 -- "변경/삭제 이력" UI 는 이 테이블 + devices 의 deleted_at 행을 합쳐 표시한다 (DESIGN.md §7.4).
@@ -566,9 +620,10 @@ def call_with_auto_refresh(intent, data):
 | 작업 이력 조회 | ✅ | ✅ | ✅ |
 | 장치 추가 | ❌ | ✅ | ✅ |
 | 장치 삭제 (soft) | ❌ | ✅ | ✅ |
-| 장치 활성/비활성 토글 | ❌ | ✅ | ✅ |
+| 자동 수집 활성/비활성 토글 (`enabled`) | ❌ | ✅ | ✅ |
+| 수동 수집 대상 체크 토글 (`manual_enabled`) | ❌ | ✅ | ✅ |
 | 단건 수동 재수집 (`/api/jobs/run`) | ❌ | ❌ | ✅ |
-| 일괄 수동 수집 (`/api/jobs/bulk_run`, 기간 지정) — 활성 장치 전체 × 기간 | ❌ | ❌ | ✅ |
+| 일괄 수동 수집 (`/api/jobs/bulk_run`, 기간 지정) — **수동 수집 대상(manual_enabled=1)** 전체 × 기간 | ❌ | ❌ | ✅ |
 | 사용자/토큰 관리 | ❌ | ❌ | ✅ |
 
 ---
@@ -579,10 +634,11 @@ def call_with_auto_refresh(intent, data):
 | Method | Path | 권한 | 설명 |
 |--------|------|------|------|
 | GET | `/` | Public | 대시보드: 전체 기기 수, 어제 수집 성공/실패, 누적 용량 |
-| GET | `/devices` | Public 조회 | 활성 장치 + 변경/삭제 이력 + 그룹 관리. 로그인 시 추가/편집/삭제/토글/일괄 ON-OFF 버튼 노출. **설치 장소 드롭다운 필터** + 일괄 ON/OFF + 인라인 편집 폼(적용 버튼). admin 은 변경 이력 단일 삭제 가능. |
-| GET | `/data` | Public | 데이터 현황: device×bundle별 파일 수, 총 용량, 최초~최종 수집일자. **설치 장소 드롭다운 필터** + 표시/전체 카운터. |
+| GET | `/devices` | Public 조회 | 활성 장치 + 변경/삭제 이력 + 그룹 관리. 로그인 시 추가/편집/삭제/토글(자동·수동 모두 체크박스)/일괄 선택-해제 버튼 노출. **설치 장소별 그룹 접기/펼치기**(기본 전체 접힘, 장소 헤더 클릭 토글 + 전체 펼치기/접기, 미지정은 마지막 그룹) + 일괄 선택/해제 + 인라인 편집 폼(적용 버튼). admin 은 변경 이력 단일 삭제 가능. |
+| GET | `/data` | Public | 데이터 현황: device×bundle별 파일 수, 총 용량, 최초~최종 수집일자. **설치 장소별 그룹 접기/펼치기**(기본 전체 접힘, 장소 헤더 클릭 토글 + 전체 펼치기/접기, 미지정은 마지막 그룹) + 표시/전체 카운터. |
 | GET | `/display/{device_id}?to=&days=` | 로그인 | 디바이스 활동 타임라인 시각화 (1주일×1일/행). hub-agnostic URL — Aqara `lumi.<hex>` 와 SmartThings UUID/24-hex 모두 매치. 시각화 규칙·레이아웃·엣지 케이스는 [DISPLAY.md](DISPLAY.md) 참조 |
 | GET | `/display/group/{group_id}?to=&days=` | 로그인 | 그룹 멤버 디바이스를 device_type 별 패널로 합산 시각화 (DISPLAY.md §4.8) |
+| GET | `/display/location/{location}?to=&days=` | 로그인 | 설치 장소가 동일한 디바이스를 device_type 별 패널로 합산 시각화 (그룹 화면과 동일 로직, 멤버 선택 기준만 install_location). `__none__`=미지정. `/data` 의 장소 헤더 링크로 진입 (DISPLAY.md §4.11) |
 | GET | `/data/{device_id}/{bundle_key}` | 로그인 | 일자별 CSV 파일 목록(파일별 크기, 행 수) + 다운로드 링크. CSV 다운로드는 로그인 사용자만. |
 | GET | `/jobs` | Public | 최근 작업 이력 (상태 필터, 날짜 필터) |
 | GET | `/login` | Public | 로그인 폼 |
@@ -595,11 +651,12 @@ def call_with_auto_refresh(intent, data):
 | Method | Path | 권한 | 설명 |
 |--------|------|------|------|
 | GET | `/api/devices?include_deleted=0` | Public | 활성 장치 목록 (선택적으로 삭제 이력 포함) |
-| POST | `/api/devices` | 로그인 | 기기 등록 `{device_type, device_id_input, install_location, install_date, alias?}` — 서버가 ID 정규화 + `created_by`/`created_by_name`/`created_at` 자동 기록 |
+| POST | `/api/devices` | 로그인 | 기기 등록 `{device_type, device_id_input, hub?, install_location, install_date, alias?}` — 서버가 ID 정규화 + `created_by`/`created_by_name`/`created_at` 자동 기록. `hub` 미지정 시 device_type 이 단일 hub 만 지원하면 자동 결정. **SmartThings 는 등록 시 `enabled=0` 고정**(자동 수집 미지원, §5). |
 | DELETE | `/api/devices/{id}` | 로그인 | **Soft delete**: `deleted_at`, `deleted_by`, `deleted_by_name` 자동 설정 (행 보존, 미래 수집 중단) |
-| PATCH | `/api/devices/{id}` | 로그인 | 등록자·등록일을 제외한 모든 속성 변경 (`device_id_input`/`device_type`/`hub`/`enabled`/`alias`/`install_location`/`install_date`/`group_id`). 적용 직후 스냅샷이 `device_history` 에 기록되고, `updated_at`/`updated_by_name` 이 갱신된다. `group_id=null` 은 그룹 해제. **예외**: `enabled` 만 단독 변경된 경우 이력에 기록하지 않는다(토글 누적 가치 낮음). |
+| PATCH | `/api/devices/{id}` | 로그인 | 등록자·등록일을 제외한 모든 속성 변경 (`device_id_input`/`device_type`/`hub`/`enabled`/`manual_enabled`/`alias`/`install_location`/`install_date`/`group_id`). 적용 직후 스냅샷이 `device_history` 에 기록되고, `updated_at`/`updated_by_name` 이 갱신된다. `group_id=null` 은 그룹 해제. **예외**: `enabled`·`manual_enabled` 토글만 단독(또는 둘만) 변경된 경우 이력에 기록하지 않는다(토글 누적 가치 낮음). |
 | GET | `/api/devices/history` | Public | 디바이스 변경/삭제 이력 목록 (수정 적용 후 스냅샷 + 삭제 행 통합) |
-| POST | `/api/devices/bulk_enable` | 로그인 | 모든 활성 장치의 `enabled` 를 일괄 ON/OFF. `{enabled: bool}` — `device_history` 에는 기록하지 않는다(토글 누적 가치 낮음). `updated_at`/`updated_by_name` 만 갱신. `{ok, changed, total}` 반환 |
+| POST | `/api/devices/bulk_enable` | 로그인 | 활성 장치의 `enabled`(자동 수집) 를 일괄 ON/OFF. `{enabled: bool, location?: str}` — `location` 미지정이면 전체, 지정 시 해당 설치 장소로 한정(`"__none__"` 은 미지정 장소). `device_history` 에는 기록하지 않는다(토글 누적 가치 낮음). `updated_at`/`updated_by_name` 만 갱신. `{ok, changed, total}` 반환 |
+| POST | `/api/devices/bulk_manual_enable` | 로그인 | 활성 장치의 `manual_enabled`(수동 수집 대상) 를 일괄 선택/해제. `{enabled: bool, location?: str}` — `location` 범위 규약은 `bulk_enable` 과 동일. `device_history` 에는 기록하지 않는다. `updated_at`/`updated_by_name` 만 갱신. `{ok, changed, total}` 반환 |
 | DELETE | `/api/devices/history/{history_id}` | admin | 단일 `device_history` 행 삭제. admin 이 무의미한 토글 이력 등을 수동 정리할 때 사용. 'delete' 이력은 devices 테이블 의 soft-delete 행에 묶여 있어 이 라우트로 삭제 불가. |
 | GET | `/api/groups` | Public | 그룹 목록 + 각 그룹 멤버 수 |
 | POST | `/api/groups` | 로그인 | 그룹 생성 `{name, device_type?(정보용), description?}` — `name` 유일 |
@@ -609,7 +666,7 @@ def call_with_auto_refresh(intent, data):
 | GET | `/api/data/{device}/{bundle_key}/{date}/download` | 로그인 | 단일 일자 CSV 다운로드 |
 | GET | `/api/data/{device}/{bundle_key}/bundle?from=&to=&format=zip\|concat` | 로그인 | 기간 선택 일괄 다운로드. `format=zip`은 일자별 CSV를 묶은 zip, `format=concat`은 헤더 1회 + 일자 오름차순으로 이어붙인 단일 CSV (스트리밍 응답) |
 | POST | `/api/jobs/run` | admin | 단건 수동 수집 `{device_id, bundle_key, target_date}` |
-| POST | `/api/jobs/bulk_run` | admin | 일괄 수동 수집 `{from, to}` (YYYY-MM-DD) — 활성 장치 × 기간 모든 일자를 백그라운드로 수집. 최대 31일. 202 Accepted 반환 후 `/jobs` 페이지에서 진행 상황 확인. |
+| POST | `/api/jobs/bulk_run` | admin | 일괄 수동 수집 `{from, to}` (YYYY-MM-DD) — **수동 수집 대상(manual_enabled=1)** 장치 × 기간 모든 일자를 백그라운드로 수집. 최대 31일. 202 Accepted 반환 후 `/jobs` 페이지에서 진행 상황 확인. |
 | GET | `/api/jobs?from=&to=&status=` | Public | 작업 이력 |
 | GET | `/api/alerts` | Public | active 시스템 경고 알림 목록 (배너 폴링용) |
 | POST | `/api/alerts/{id}/resolve` | 로그인 | 알림 수동 해제 (`resolved_at`, `resolved_by` 기록) |
@@ -634,6 +691,7 @@ def call_with_auto_refresh(intent, data):
 - **concat**: 첫 파일의 `#` 메타 헤더 + 컬럼 헤더를 1회만 출력하고, 일자 오름차순으로 데이터 행만 이어붙인 단일 CSV를 **스트리밍**(`StreamingResponse`)으로 응답 → 메모리에 전체 로드하지 않음. 파일명 예시: `{from_compact}-{to_compact}_{last6}_{bundle_key}.csv`.
 - 누락 일자(`collection_jobs`에 row 없거나 `status != 'success'`)는 응답 본문에 영향 없고, 응답 헤더 `X-Missing-Dates`에 콤마로 나열 (사용자가 확인 가능).
 - 너무 긴 기간 보호: `to - from > 365일`이면 400 반환 (필요 시 admin은 조정).
+- **알려진 제약(수정 예정)**: 다운로드 라우트(`/api/data/.../download`·`/bundle`)는 현재 파일명 suffix 를 Aqara `last6(device_id)` 로만 산출한다([app/routes/api.py](app/routes/api.py) `download_single`/`download_bundle`). 수집 측(`collector.csv_path_for`)은 hub 별로 분기(Aqara 끝 6자리 / SmartThings 첫 8자리, §15.7)하므로, **SmartThings 디바이스의 CSV 다운로드는 파일명이 어긋나 404/누락**된다. `device_id_suffix(device_id, hub)` 로 분기하도록 보완해야 한다.
 
 ### 7.4 "장치 목록" 화면 (F1a/F2)
 **활성 장치 탭** (기본):
@@ -646,13 +704,17 @@ def call_with_auto_refresh(intent, data):
 | 설치 날짜 | `install_date` |
 | 그룹 | `group_id` → 그룹명. 로그인 시 드롭다운으로 변경/해제. 그룹 목록은 모든 종류의 그룹을 포함. |
 | 등록자 / 등록일 | `created_by_name` / `created_at` (변경 불가). 수정 이력이 있으면 같은 셀에 `updated_at` (수정자) 보조 표기. |
-| 수집 상태 | `enabled` 토글 (로그인 시) |
+| 자동 수집 | `enabled` **체크박스 토글** (로그인 시, 수동 수집 대상과 동일한 UI — 체크=`대상`/해제=`제외` 표기). 매일 09:00 자동 수집·backfill 대상 여부. **hub='smartthings' 는 자동 수집 미지원 → OFF 고정** (체크박스 대신 "OFF (고정)" 표기). |
+| 수동 수집 대상 | `manual_enabled` 체크박스 토글 (로그인 시). 일괄 수동 수집(bulk_run) 대상 여부. `enabled` 와 독립. |
 | 작업 | ✏️ 편집 / 🗑️ 삭제 (로그인 시). 편집은 모달/인라인 폼 → **적용** 버튼으로만 확정 (`PATCH /api/devices/{id}`). |
+
+활성 장치 표 헤더에는 **자동 수집 일괄 선택/해제**(`bulk_enable`) 와 **수동 대상 일괄 선택/해제**(`bulk_manual_enable`) 버튼을 각각 둔다. 두 일괄 토글의 버튼 라벨은 **`선택`/`해제`로 통일**한다(헤더는 `전체 선택`/`전체 해제`, 장소 그룹은 `선택`/`해제`). 또한 **설치 장소 그룹 헤더마다** 그 장소 장치만 대상으로 하는 자동·수동 일괄 토글 버튼을 두어(`bulk_enable`/`bulk_manual_enable` 에 `location` 전달), 장소 단위로 수집 대상을 일괄 조정할 수 있다.
 
 페이지 하단에 **그룹 관리 미니 섹션**(로그인 시)을 두어 그룹 생성·삭제와 멤버 수 조회를 제공한다.
 
 상단에는 **일괄 수동 수집 섹션**(admin 전용)을 두어 기간(from·to YYYY-MM-DD)을 지정하면
-활성 장치 전체 × 기간 내 모든 일자를 백그라운드로 수집한다 (`POST /api/jobs/bulk_run`).
+**수동 수집 대상(manual_enabled=1)** 장치 전체 × 기간 내 모든 일자를 백그라운드로 수집한다 (`POST /api/jobs/bulk_run`).
+자동 수집 활성(`enabled`) 여부와 무관하게 수동 대상 플래그만 참조하므로, 자동은 꺼두고 원하는 장치만 수동으로 받아올 수 있다.
 - 최대 기간: **31일** (Aqara API 호출량·토큰 만료 위험 완화)
 - 동작: 요청 즉시 202 Accepted 응답을 받고 백그라운드 스레드에서 일자별로
   `collector.collect_for_date()` 를 순차 호출. 결과는 기존 `collection_jobs` 테이블에 그대로 기록되어
@@ -861,8 +923,9 @@ python-dotenv>=1.0    # .env 자동 로드 (config.py)
 ## 15. SmartThings 통합 (확장 설계)
 
 기존 Aqara 시스템에 **Samsung SmartThings** 디바이스 데이터 수집을 추가한다. 본 절은
-아직 미구현(설계만)이며, 구현 시 §3 ~ §10 의 패턴을 그대로 따라 hub 분기를 더한다.
-참고: 기존 `./samsung/` 폴더의 독립 스크립트들이 동작 검증되어 있어 그 로직을 흡수한다.
+**구현 완료**되었으며(§3 ~ §10 패턴에 hub 분기를 더함), `./samsung/` 폴더의 독립 스크립트 로직을 흡수했다.
+
+> ⚠️ **구현 노트 (최종 구조)**: 아래 §15.4~§15.9 초안은 별도 `SMARTTHINGS_DEVICE_TYPES` dict 와 `st_*` 키(`st_contact`·`st_motion` 등), `AQARA_DEVICE_TYPES`/`DEVICE_TYPES_ALL` dispatch 를 상정했으나 **채택되지 않았다**. 실제 코드는 §3.1 의 단일 `DEVICE_TYPES` 에 `DeviceType.bundles_by_hub={"aqara": …, "smartthings": …}` 를 두어 hub 별 bundle 을 분리한다(`app/devices.py`). SmartThings 전용 종류의 실제 키는 `motion_and_light_p2`·`motion_and_light_wm`·`temp_humi_wm` 이며, 기존 Aqara 종류(door_t1·vibration_t1·switch_t1·smart_plug_eu·water_leak_t1·temp_humi_t1·motion_t1·motion_p1)는 각자 `bundles_by_hub["smartthings"]` 분기를 갖는다. 아래 초안의 `st_*` 키·dict 이름은 개념 참고용이며 최종 device_type 키·구조는 §3.1·DEVICE.md §0 요약표를 따른다.
 
 ### 15.1 개요
 

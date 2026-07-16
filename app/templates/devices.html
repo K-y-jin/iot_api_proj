@@ -1,6 +1,135 @@
 {% extends "base.html" %}
 {% block title %}장치 · IoT 데이터 수집{% endblock %}
 {% block content %}
+{# 활성 장치 1행(+편집 폼 행) 렌더 매크로.
+   설치 장소별 접기/펼치기를 위해 표를 장소 그룹으로 나눠 렌더하므로, 행 마크업을 매크로로 분리해
+   각 그룹에서 재사용한다. 매크로는 호출 시점 컨텍스트를 자동 상속하지 않으므로 user/device_types/groups 를 인자로 받는다. #}
+{% macro device_row(d, user, device_types, groups) %}
+  {# 기본 접힘 상태 — 페이지 로드 시 모든 그룹이 접혀 있도록 장치 행을 숨김으로 렌더 (헤더 클릭 시 펼침). #}
+  <tr id="device-row-{{ d.id }}" class="device-row" data-install-location="{{ d.install_location or '' }}" style="display:none;">
+    <td><span class="hub-badge hub-{{ d.hub or 'aqara' }}">{{ (d.hub or 'aqara') }}</span></td>
+    <td>{{ device_types[d.device_type].display_name_ko if d.device_type in device_types else d.device_type }}</td>
+    <td><code>{{ d.device_id_upper }}</code></td>
+    <td>{{ d.alias or "" }}</td>
+    <td>{{ d.install_location or "" }}</td>
+    <td>{{ d.install_date or "" }}</td>
+    <td>
+      {% if user %}
+        <select onchange="changeDeviceGroup({{ d.id }}, this.value)">
+          <option value="">(없음)</option>
+          {% for g in groups %}
+            <option value="{{ g.id }}" {% if d.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+          {% endfor %}
+        </select>
+      {% else %}
+        {{ group_name_by_id.get(d.group_id, "") if d.group_id else "" }}
+      {% endif %}
+    </td>
+    <td>{{ d.created_by_name }}</td>
+    <td>
+      {{ d.created_at }}
+      {% if d.updated_at %}
+        <div class="muted" style="font-size:0.85em;">
+          ✏️ {{ d.updated_at }}{% if d.updated_by_name %} ({{ d.updated_by_name }}){% endif %}
+        </div>
+      {% endif %}
+    </td>
+    <td>
+      {# SmartThings 허브는 자동 수집 미지원 → OFF 고정, 토글 비활성 (DESIGN.md §5). #}
+      {% if (d.hub or 'aqara') == 'smartthings' %}
+        <span class="muted" title="SmartThings 허브는 자동 수집을 지원하지 않습니다">OFF (고정)</span>
+      {% elif user %}
+        <label title="자동 수집(enabled) 대상 여부">
+          <input type="checkbox" onchange="toggleDevice({{ d.id }}, this.checked)"
+                 {% if d.enabled %}checked{% endif %} />
+          <span>{{ "대상" if d.enabled else "제외" }}</span>
+        </label>
+      {% else %}
+        {{ "대상" if d.enabled else "제외" }}
+      {% endif %}
+    </td>
+    <td>
+      {% if user %}
+        <label title="일괄 수동 수집(bulk_run) 대상 여부">
+          <input type="checkbox" onchange="toggleManualDevice({{ d.id }}, this.checked)"
+                 {% if d.manual_enabled %}checked{% endif %} />
+          <span>{{ "대상" if d.manual_enabled else "제외" }}</span>
+        </label>
+      {% else %}
+        {{ "대상" if d.manual_enabled else "제외" }}
+      {% endif %}
+    </td>
+    {% if user %}
+      <td>
+        <button onclick="openDeviceEditor({{ d.id }})">✏️ 편집</button>
+        <button class="danger" onclick="deleteDevice({{ d.id }})">🗑 삭제</button>
+      </td>
+    {% endif %}
+  </tr>
+  {# 편집 폼 행 — 기본 숨김. openDeviceEditor() 가 토글. "적용" 버튼으로만 PATCH 발생. #}
+  {% if user %}
+    <tr id="device-edit-{{ d.id }}" class="device-edit-row" data-install-location="{{ d.install_location or '' }}" style="display:none;">
+      <td colspan="12">
+        <form onsubmit="return submitDeviceEdit(event, {{ d.id }})"
+              data-current-type="{{ d.device_type }}"
+              data-current-hub="{{ d.hub or 'aqara' }}"
+              data-current-device-id="{{ d.device_id_upper }}"
+              class="device-edit-form">
+          <p class="muted">등록자·등록일은 변경할 수 없습니다. 적용 후 변경 전 내용이 변경 이력에 기록됩니다.</p>
+          <label>기기 종류
+            <select name="device_type" onchange="onEditTypeChange(this)">
+              {% for k, dt in device_types.items() %}
+                <option value="{{ k }}" data-hubs="{{ dt.bundles_by_hub.keys()|join(',') }}"
+                        {% if d.device_type == k %}selected{% endif %}>{{ dt.display_name_ko }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>허브
+            <select name="hub" onchange="syncEnabledLock(this.form)"></select>
+          </label>
+          <label>Device ID
+            <input name="device_id_input" value="{{ d.device_id_upper }}" />
+          </label>
+          <label>설치 장소
+            <input name="install_location" value="{{ d.install_location or '' }}" />
+          </label>
+          <label>설치 날짜
+            <input name="install_date" type="date" value="{{ d.install_date or '' }}" />
+          </label>
+          <label>별명
+            <input name="alias" value="{{ d.alias or '' }}" />
+          </label>
+          <label>그룹
+            <select name="group_id">
+              <option value="">(없음)</option>
+              {% for g in groups %}
+                <option value="{{ g.id }}" {% if d.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>자동 수집
+            {# SmartThings 허브는 자동 수집 미지원 → 잠금(OFF 고정). syncEnabledLock() 이 hub 변경에 반응. #}
+            <select name="enabled" data-st-locked
+                    {% if (d.hub or 'aqara') == 'smartthings' %}disabled{% endif %}>
+              <option value="1" {% if d.enabled and (d.hub or 'aqara') != 'smartthings' %}selected{% endif %}>ON</option>
+              <option value="0" {% if not d.enabled or (d.hub or 'aqara') == 'smartthings' %}selected{% endif %}>OFF</option>
+            </select>
+            <span class="muted st-lock-note {% if (d.hub or 'aqara') != 'smartthings' %}hidden{% endif %}">SmartThings 미지원</span>
+          </label>
+          <label>수동 수집 대상
+            <select name="manual_enabled">
+              <option value="1" {% if d.manual_enabled %}selected{% endif %}>대상</option>
+              <option value="0" {% if not d.manual_enabled %}selected{% endif %}>제외</option>
+            </select>
+          </label>
+          <button type="submit">적용</button>
+          <button type="button" onclick="closeDeviceEditor({{ d.id }})">취소</button>
+          <span class="muted edit-status"></span>
+        </form>
+      </td>
+    </tr>
+  {% endif %}
+{% endmacro %}
 <section class="card">
   <h1>자동 기록 장치</h1>
   <p class="muted">로그인 없이도 조회 가능. 추가/삭제는 로그인 필요. (DESIGN.md §7.4)</p>
@@ -8,7 +137,8 @@
   {# 일괄 수동 수집 (DESIGN.md §7.4). admin 전용. #}
   {% if user and user.is_admin %}
     <h2>일괄 수동 수집 <span class="muted">(admin)</span></h2>
-    <p class="muted">활성 장치 전체에 대해 지정 기간의 데이터를 백그라운드로 수집합니다. 최대 31일.
+    <p class="muted"><b>수동 수집 대상</b>으로 지정된 장치 전체에 대해 지정 기간의 데이터를 백그라운드로 수집합니다
+      (자동 수집 활성 여부와 무관). 최대 31일. 대상 지정은 아래 표의 "수동 수집" 열에서 설정.
       진행 상황은 <a href="/jobs">/jobs</a> 페이지에서 확인.</p>
     <form id="bulk-collect-form" onsubmit="return submitBulkCollect(event)">
       <label>시작일 (from)
@@ -23,32 +153,36 @@
   {% endif %}
 
   {# 활성 장치 — 로그인 시 행을 클릭하면 인라인 편집 폼이 열림. 변경은 적용 버튼으로만 확정. #}
-  <h2>활성 장치 (<span id="active-visible-count">{{ active_devices|length }}</span>/{{ active_devices|length }})
+  <h2>활성 장치 (<span id="active-visible-count">0</span>/{{ active_devices|length }})
     {% if user %}
-      {# 일괄 ON/OFF — 활성 디바이스 전체의 enabled 를 한 번에 변경 (DESIGN.md §7.4). #}
+      {# 일괄 토글 — 자동 수집(enabled) 과 수동 수집 대상(manual_enabled) 을 각각 전체 변경 (DESIGN.md §7.4). #}
       <span style="font-size:0.7em; font-weight:normal; margin-left:1em;">
-        <button onclick="bulkToggleDevices(true)">전체 ON</button>
-        <button onclick="bulkToggleDevices(false)">전체 OFF</button>
+        자동:
+        <button onclick="bulkToggleDevices(true)">전체 선택</button>
+        <button onclick="bulkToggleDevices(false)">전체 해제</button>
         <span id="bulk-toggle-status" class="muted"></span>
+      </span>
+      <span style="font-size:0.7em; font-weight:normal; margin-left:1em;">
+        수동 대상:
+        <button onclick="bulkToggleManual(true)">전체 선택</button>
+        <button onclick="bulkToggleManual(false)">전체 해제</button>
+        <span id="bulk-manual-toggle-status" class="muted"></span>
       </span>
     {% endif %}
   </h2>
 
-  {# 설치 장소 필터 — DB 에 존재하는 install_location 고유값으로 드롭다운 자동 생성.
-     "(전체)" 와 "(미지정)" 옵션 별도. 클라이언트 측 JS 만으로 즉시 필터링. #}
+  {# 설치 장소별 접기/펼치기 — DB 의 install_location 고유값을 그룹으로 묶고, 각 그룹 헤더 행을
+     클릭해 해당 장소 장치들을 접거나 편다. 미지정(빈 값) 장치는 "(미지정)" 그룹으로 마지막에 렌더.
+     드롭다운 필터를 대체 (사용자 요청). 그룹 토글은 클라이언트 JS 만으로 처리. #}
   {% set device_locations = active_devices | map(attribute='install_location')
                                             | reject('none') | reject('equalto', '')
                                             | unique | list | sort %}
+  {% set unlocated = active_devices | selectattr('install_location', 'in', [none, ''])
+                                    | list %}
   <p>
-    <label>설치 장소
-      <select id="device-location-filter" onchange="filterDevicesByLocation(this.value)">
-        <option value="">(전체)</option>
-        {% for loc in device_locations %}
-          <option value="{{ loc }}">{{ loc }}</option>
-        {% endfor %}
-        <option value="__none__">(미지정)</option>
-      </select>
-    </label>
+    <button type="button" onclick="setAllLocationGroups(true)">전체 펼치기</button>
+    <button type="button" onclick="setAllLocationGroups(false)">전체 접기</button>
+    <span class="muted" style="margin-left:0.5em;">설치 장소 헤더를 클릭해 접기/펼치기</span>
   </p>
   <table>
     <thead>
@@ -58,110 +192,67 @@
         <th>설치 장소</th><th>설치 날짜</th>
         <th>그룹</th>
         <th>등록자</th><th>등록일 / 수정일</th>
-        <th>수집</th>{% if user %}<th>작업</th>{% endif %}
+        <th>자동 수집</th><th>수동 수집</th>{% if user %}<th>작업</th>{% endif %}
       </tr>
     </thead>
     <tbody>
-      {% for d in active_devices %}
-        <tr id="device-row-{{ d.id }}" class="device-row" data-install-location="{{ d.install_location or '' }}">
-          <td><span class="hub-badge hub-{{ d.hub or 'aqara' }}">{{ (d.hub or 'aqara') }}</span></td>
-          <td>{{ device_types[d.device_type].display_name_ko if d.device_type in device_types else d.device_type }}</td>
-          <td><code>{{ d.device_id_upper }}</code></td>
-          <td>{{ d.alias or "" }}</td>
-          <td>{{ d.install_location or "" }}</td>
-          <td>{{ d.install_date or "" }}</td>
-          <td>
-            {% if user %}
-              <select onchange="changeDeviceGroup({{ d.id }}, this.value)">
-                <option value="">(없음)</option>
-                {% for g in groups %}
-                  <option value="{{ g.id }}" {% if d.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
-                {% endfor %}
-              </select>
-            {% else %}
-              {{ group_name_by_id.get(d.group_id, "") if d.group_id else "" }}
-            {% endif %}
+      {# 장소별 그룹 헤더 + 소속 장치 행. 헤더의 data-loc-group 값과 각 행의 동일 속성으로 JS 가 토글 대상을 찾는다.
+         colspan 은 컬럼 수(비로그인 11, 로그인 12=작업열 포함)에 맞춘다. #}
+      {% for loc in device_locations %}
+        {% set loc_devices = active_devices | selectattr('install_location', 'equalto', loc) | list %}
+        <tr class="loc-group-header collapsed" data-loc-group="{{ loc }}"
+            onclick="toggleLocationGroup(this.dataset.locGroup)">
+          <td colspan="{{ 12 if user else 11 }}">
+            <span class="loc-caret">▼</span>
+            <b>{{ loc }}</b> <span class="muted">({{ loc_devices|length }}대)</span>
           </td>
-          <td>{{ d.created_by_name }}</td>
-          <td>
-            {{ d.created_at }}
-            {% if d.updated_at %}
-              <div class="muted" style="font-size:0.85em;">
-                ✏️ {{ d.updated_at }}{% if d.updated_by_name %} ({{ d.updated_by_name }}){% endif %}
-              </div>
-            {% endif %}
-          </td>
-          <td>
-            {% if user %}
-              <button onclick="toggleDevice({{ d.id }}, {{ 'false' if d.enabled else 'true' }})">
-                {{ "ON" if d.enabled else "OFF" }}
-              </button>
-            {% else %}
-              {{ "ON" if d.enabled else "OFF" }}
-            {% endif %}
-          </td>
-          {% if user %}
-            <td>
-              <button onclick="openDeviceEditor({{ d.id }})">✏️ 편집</button>
-              <button class="danger" onclick="deleteDevice({{ d.id }})">🗑 삭제</button>
-            </td>
-          {% endif %}
         </tr>
-        {# 편집 폼 행 — 기본 숨김. openDeviceEditor() 가 토글. "적용" 버튼으로만 PATCH 발생. #}
+        {# 설치 장소별 일괄 토글 — 그룹을 펼쳤을 때 첫 줄에 노출 (DESIGN.md §7.4).
+           이 장소 장치만 자동/수동 수집 대상을 일괄 변경. 기본 숨김, toggleLocationGroup 이 표시. #}
         {% if user %}
-          <tr id="device-edit-{{ d.id }}" class="device-edit-row" data-install-location="{{ d.install_location or '' }}" style="display:none;">
-            <td colspan="11">
-              <form onsubmit="return submitDeviceEdit(event, {{ d.id }})"
-                    data-current-type="{{ d.device_type }}"
-                    data-current-hub="{{ d.hub or 'aqara' }}"
-                    data-current-device-id="{{ d.device_id_upper }}"
-                    class="device-edit-form">
-                <p class="muted">등록자·등록일은 변경할 수 없습니다. 적용 후 변경 전 내용이 변경 이력에 기록됩니다.</p>
-                <label>기기 종류
-                  <select name="device_type" onchange="onEditTypeChange(this)">
-                    {% for k, dt in device_types.items() %}
-                      <option value="{{ k }}" data-hubs="{{ dt.bundles_by_hub.keys()|join(',') }}"
-                              {% if d.device_type == k %}selected{% endif %}>{{ dt.display_name_ko }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label>허브
-                  <select name="hub"></select>
-                </label>
-                <label>Device ID
-                  <input name="device_id_input" value="{{ d.device_id_upper }}" />
-                </label>
-                <label>설치 장소
-                  <input name="install_location" value="{{ d.install_location or '' }}" />
-                </label>
-                <label>설치 날짜
-                  <input name="install_date" type="date" value="{{ d.install_date or '' }}" />
-                </label>
-                <label>별명
-                  <input name="alias" value="{{ d.alias or '' }}" />
-                </label>
-                <label>그룹
-                  <select name="group_id">
-                    <option value="">(없음)</option>
-                    {% for g in groups %}
-                      <option value="{{ g.id }}" {% if d.group_id == g.id %}selected{% endif %}>{{ g.name }}</option>
-                    {% endfor %}
-                  </select>
-                </label>
-                <label>수집 상태
-                  <select name="enabled">
-                    <option value="1" {% if d.enabled %}selected{% endif %}>ON</option>
-                    <option value="0" {% if not d.enabled %}selected{% endif %}>OFF</option>
-                  </select>
-                </label>
-                <button type="submit">적용</button>
-                <button type="button" onclick="closeDeviceEditor({{ d.id }})">취소</button>
-                <span class="muted edit-status"></span>
-              </form>
+          <tr class="loc-bulk-row" data-loc-group="{{ loc }}" data-install-location="{{ loc }}" style="display:none;">
+            <td colspan="12">
+              <span class="loc-bulk muted">
+                자동:
+                <button type="button" onclick="bulkToggleDevicesLocation(this, true)">선택</button>
+                <button type="button" onclick="bulkToggleDevicesLocation(this, false)">해제</button>
+                <span style="margin-left:0.6em;">수동:</span>
+                <button type="button" onclick="bulkToggleManualLocation(this, true)">선택</button>
+                <button type="button" onclick="bulkToggleManualLocation(this, false)">해제</button>
+              </span>
             </td>
           </tr>
         {% endif %}
+        {% for d in loc_devices %}
+          {{ device_row(d, user, device_types, groups) }}
+        {% endfor %}
       {% endfor %}
+      {% if unlocated %}
+        <tr class="loc-group-header collapsed" data-loc-group="__none__"
+            onclick="toggleLocationGroup(this.dataset.locGroup)">
+          <td colspan="{{ 12 if user else 11 }}">
+            <span class="loc-caret">▼</span>
+            <b>(미지정)</b> <span class="muted">({{ unlocated|length }}대)</span>
+          </td>
+        </tr>
+        {% if user %}
+          <tr class="loc-bulk-row" data-loc-group="__none__" data-install-location="" style="display:none;">
+            <td colspan="12">
+              <span class="loc-bulk muted">
+                자동:
+                <button type="button" onclick="bulkToggleDevicesLocation(this, true)">선택</button>
+                <button type="button" onclick="bulkToggleDevicesLocation(this, false)">해제</button>
+                <span style="margin-left:0.6em;">수동:</span>
+                <button type="button" onclick="bulkToggleManualLocation(this, true)">선택</button>
+                <button type="button" onclick="bulkToggleManualLocation(this, false)">해제</button>
+              </span>
+            </td>
+          </tr>
+        {% endif %}
+        {% for d in unlocated %}
+          {{ device_row(d, user, device_types, groups) }}
+        {% endfor %}
+      {% endif %}
     </tbody>
   </table>
 
@@ -186,7 +277,7 @@
         <input name="device_id_input" required placeholder="기기 종류·허브 선택 후 입력" />
       </label>
       <label>설치 장소
-        <input name="install_location" placeholder="예: 거실" />
+        <input name="install_location" placeholder="예: 광주서구 1" />
       </label>
       <label>설치 날짜
         <input name="install_date" type="date" />

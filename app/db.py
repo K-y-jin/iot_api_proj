@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS devices (
     install_date     TEXT,
     alias            TEXT,
     enabled          INTEGER NOT NULL DEFAULT 1,
+    manual_enabled   INTEGER NOT NULL DEFAULT 1,
     group_id         INTEGER REFERENCES device_groups(id) ON DELETE SET NULL,
     created_by       INTEGER NOT NULL REFERENCES users(id),
     created_by_name  TEXT NOT NULL,
@@ -215,6 +216,23 @@ def _ensure_devices_group_id(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_devices_group ON devices(group_id)")
 
 
+def _ensure_devices_manual_enabled(conn: sqlite3.Connection) -> None:
+    """devices.manual_enabled 컬럼 보장 (DESIGN.md §5 수집 대상 플래그 분리).
+
+    enabled(자동 수집) 와 독립적인 수동 일괄 수집 대상 플래그. 초기에는 enabled 하나가
+    자동·수동 양쪽 대상을 결정했으나 두 축을 분리했다 — /api/jobs/bulk_run 은
+    manual_enabled=1 만 참조한다.
+
+    기존 DB 마이그레이션: 컬럼이 없으면 ADD COLUMN 후, *그 시점의 enabled 값으로 시드* 하여
+    기존 동작(활성 장치 = 수동 수집 대상)을 그대로 보존한다. 신규 행은 DEFAULT 1.
+    멱등 — 이미 컬럼이 있으면 시드 UPDATE 를 건너뛴다(사용자가 조정한 값 덮어쓰기 방지).
+    """
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(devices)")}
+    if "manual_enabled" not in cols:
+        conn.execute("ALTER TABLE devices ADD COLUMN manual_enabled INTEGER NOT NULL DEFAULT 1")
+        conn.execute("UPDATE devices SET manual_enabled = enabled")
+
+
 def _ensure_device_history_changed_fields(conn: sqlite3.Connection) -> None:
     """device_history.changed_fields 컬럼 보장 (DESIGN.md §5).
 
@@ -301,6 +319,7 @@ def init_db(db_path: Path | str | None = None) -> None:
     _ensure_device_groups_type_nullable(conn)
     _ensure_devices_hub(conn)
     _ensure_devices_updated_columns(conn)
+    _ensure_devices_manual_enabled(conn)
     _ensure_device_history_changed_fields(conn)
     _purge_enabled_only_history(conn)
     conn.close()

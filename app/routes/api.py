@@ -40,6 +40,7 @@ class DevicePatch(BaseModel):
     (예: group_id=null 은 그룹 해제 의도이므로 None 미제공과 달라야 함).
     """
     enabled: Optional[bool] = None
+    manual_enabled: Optional[bool] = None
     alias: Optional[str] = None
     install_location: Optional[str] = None
     install_date: Optional[str] = None
@@ -151,6 +152,9 @@ def create_device(payload: DeviceCreate, user: CurrentUser = Depends(require_log
     norm = normalize_device_id(payload.device_id_input, hub=hub)
     upper = norm.upper().replace("LUMI.", "") if hub == "aqara" else norm.upper()
 
+    # SmartThings 는 자동 수집 미지원 → enabled OFF 고정으로 등록 (DESIGN.md §5).
+    enabled = 0 if hub == "smartthings" else 1
+
     conn = get_connection()
     try:
         try:
@@ -158,9 +162,9 @@ def create_device(payload: DeviceCreate, user: CurrentUser = Depends(require_log
                 """INSERT INTO devices(device_id, device_id_upper, device_type, hub,
                                        install_location, install_date, alias,
                                        enabled, created_by, created_by_name, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (norm, upper, payload.device_type, hub, payload.install_location,
-                 payload.install_date, payload.alias,
+                 payload.install_date, payload.alias, enabled,
                  user["id"], user["username"], now_kst_iso()),
             )
         except Exception as e:
@@ -221,6 +225,10 @@ def patch_device(device_pk: int, payload: DevicePatch, user: CurrentUser = Depen
             new_v = 1 if payload.enabled else 0
             if new_v != cur_row["enabled"]:
                 fields.append("enabled=?"); values.append(new_v)
+        if payload.manual_enabled is not None:
+            new_v = 1 if payload.manual_enabled else 0
+            if new_v != cur_row["manual_enabled"]:
+                fields.append("manual_enabled=?"); values.append(new_v)
         if payload.alias is not None and not _txt_eq(payload.alias, cur_row["alias"]):
             fields.append("alias=?"); values.append(payload.alias)
         if payload.install_location is not None and not _txt_eq(payload.install_location, cur_row["install_location"]):
@@ -255,6 +263,21 @@ def patch_device(device_pk: int, payload: DevicePatch, user: CurrentUser = Depen
             fields.append("device_type=?"); values.append(eff_type)
         if eff_hub != (cur_row["hub"] or "aqara"):
             fields.append("hub=?"); values.append(eff_hub)
+
+        # SmartThings 는 자동 수집 미지원 → enabled OFF 고정 (DESIGN.md §5).
+        # 명시적으로 켜려는 시도는 400, 그 외(허브 전환 등)에는 자동으로 enabled=0 을 보장한다.
+        if eff_hub == "smartthings":
+            if payload.enabled is True:
+                raise HTTPException(
+                    status_code=400,
+                    detail="SmartThings 허브 장치는 자동 수집을 지원하지 않습니다. enabled 를 켤 수 없습니다.",
+                )
+            # 위 enabled 처리 블록에서 enabled=? 가 이미 추가됐을 수 있으니 제거 후 0 으로 재설정.
+            if "enabled=?" in fields:
+                idx = fields.index("enabled=?")
+                fields.pop(idx); values.pop(idx)
+            if cur_row["enabled"] != 0:
+                fields.append("enabled=?"); values.append(0)
         # device_id 정규화 — id_input 또는 hub 가 변경됐을 *가능성* 이 있으면 재계산.
         # 결과가 cur_row 와 같으면 변경 없음으로 간주.
         if new_id_input is not None or new_hub is not None:
@@ -299,11 +322,11 @@ def patch_device(device_pk: int, payload: DevicePatch, user: CurrentUser = Depen
             raise HTTPException(status_code=404, detail="대상 장치를 찾을 수 없습니다.")
 
         # 2) UPDATE 직후의 *변경 후* 행을 다시 읽어 device_history 에 스냅샷.
-        # 단, ON/OFF 토글만 변경된 경우(`changed_fields` 가 정확히 'enabled')는 이력 누적 가치가
-        # 낮다고 판단해 INSERT 를 건너뛴다 (사용자 정책 — DESIGN.md §7.5).
-        # `enabled` 와 다른 필드가 함께 변경된 경우는 정상적으로 기록한다.
+        # 단, 수집 대상 토글만 변경된 경우는 이력 누적 가치가 낮다고 판단해 INSERT 를 건너뛴다
+        # (사용자 정책 — DESIGN.md §5, §7.5). 대상 토글 = enabled(자동)·manual_enabled(수동) 이며,
+        # 이 둘만(또는 하나만) 변경된 경우 스킵. 다른 필드가 함께 바뀌면 정상 기록한다.
         history_field_set = {n for n in changed_field_names if n not in ("updated_at", "updated_by", "updated_by_name")}
-        skip_history = history_field_set == {"enabled"}
+        skip_history = bool(history_field_set) and history_field_set <= {"enabled", "manual_enabled"}
         if not skip_history:
             new_row = conn.execute(
                 "SELECT * FROM devices WHERE id=?", (device_pk,)
@@ -328,47 +351,92 @@ def patch_device(device_pk: int, payload: DevicePatch, user: CurrentUser = Depen
 
 
 class DeviceBulkEnable(BaseModel):
-    """활성 장치 전체의 enabled 일괄 변경 페이로드 (DESIGN.md §7.2)."""
+    """활성 장치의 수집 대상 플래그 일괄 변경 페이로드 (DESIGN.md §7.2, §7.4).
+
+    location: 설치 장소 범위 한정. 미지정(None) 이면 활성 장치 전체가 대상.
+      - None       : 전체 활성 장치
+      - "__none__" : 설치 장소 미지정(NULL 또는 빈 문자열) 장치
+      - 그 외      : install_location 이 정확히 일치하는 장치
+    (data.html/devices.html 의 미지정 그룹 헤더 규약과 동일)
+    """
     enabled: bool
+    location: Optional[str] = None
+
+
+def _bulk_set_flag(column: str, enabled: bool, user: CurrentUser, location: Optional[str] = None) -> dict:
+    """활성 장치의 수집 대상 플래그(`column`)를 일괄로 ON/OFF 하는 공통 처리.
+
+    column 은 내부 상수('enabled' | 'manual_enabled')로만 전달 — 사용자 입력이 아니라 SQL injection 무관.
+
+    동작:
+      - 대상: `deleted_at IS NULL` 인 행. location 이 지정되면 그 설치 장소로 한정 (DESIGN.md §7.4).
+        이미 원하는 상태인 행은 건너뜀.
+      - 변경 행마다 updated_at/updated_by(_name) 갱신.
+      - **device_history 에는 기록하지 않는다** — 수집 대상 토글은 누적 가치가 낮아 이력에서 제외하는
+        정책 (PATCH 의 토글-단독 변경과 동일 — DESIGN.md §5, §7.5).
+
+    반환: {ok, changed: 변경된 디바이스 수, total: 대상 범위의 활성 디바이스 수}.
+    """
+    now = now_kst_iso()
+    new_v = 1 if enabled else 0
+    # SmartThings 는 자동 수집 미지원 → enabled 를 켜는 일괄 ON 대상에서 제외 (DESIGN.md §5).
+    # manual_enabled 일괄 토글이나 enabled OFF 에는 제약이 없다.
+    exclude_st = " AND hub <> 'smartthings'" if column == "enabled" and new_v == 1 else ""
+
+    # 설치 장소 범위 한정 — None 이면 전체, "__none__" 이면 미지정(NULL/빈 문자열), 그 외 정확 일치.
+    loc_clause = ""
+    loc_params: tuple = ()
+    if location is not None:
+        if location == "__none__":
+            loc_clause = " AND (install_location IS NULL OR install_location='')"
+        else:
+            loc_clause = " AND install_location=?"
+            loc_params = (location,)
+
+    conn = get_connection()
+    try:
+        # 변경 대상 카운트 산출 (응답에 포함). 같은 상태인 행은 UPDATE 영향 0 이라 일치.
+        changed = conn.execute(
+            f"SELECT COUNT(*) AS c FROM devices WHERE deleted_at IS NULL AND {column} <> ?{exclude_st}{loc_clause}",
+            (new_v, *loc_params),
+        ).fetchone()["c"]
+        total_active = conn.execute(
+            f"SELECT COUNT(*) AS c FROM devices WHERE deleted_at IS NULL{loc_clause}",
+            loc_params,
+        ).fetchone()["c"]
+
+        # 일괄 UPDATE — partial unique 등 제약 영향 없음 (플래그만 변경). 이력 INSERT 없음.
+        conn.execute(
+            f"""UPDATE devices
+                   SET {column}=?, updated_at=?, updated_by=?, updated_by_name=?
+                 WHERE deleted_at IS NULL AND {column} <> ?{exclude_st}{loc_clause}""",
+            (new_v, now, user["id"], user["username"], new_v, *loc_params),
+        )
+        return {"ok": True, "changed": int(changed), "total": int(total_active)}
+    finally:
+        conn.close()
 
 
 @router.post("/devices/bulk_enable")
 def bulk_enable_devices(
     payload: DeviceBulkEnable, user: CurrentUser = Depends(require_login)
 ) -> dict:
-    """모든 활성 장치의 `enabled` 를 일괄로 ON 또는 OFF (DESIGN.md §7.4).
+    """활성 장치의 `enabled`(자동 수집) 를 일괄 ON/OFF (DESIGN.md §7.4).
 
-    동작:
-      - 대상: `deleted_at IS NULL` 인 모든 행. 이미 원하는 상태(enabled == payload.enabled)인 행은 건너뜀.
-      - 변경 행마다 updated_at/updated_by(_name) 갱신.
-      - **device_history 에는 기록하지 않는다** — ON/OFF 토글은 누적 가치가 낮아 이력에서 제외하는
-        정책 (PATCH 의 enabled-단독 변경과 동일 — DESIGN.md §7.5).
-
-    반환: {ok, changed: 변경된 디바이스 수, total: 활성 디바이스 수}.
+    location 미지정 시 전체, 지정 시 해당 설치 장소로 한정.
     """
-    now = now_kst_iso()
-    new_enabled = 1 if payload.enabled else 0
-    conn = get_connection()
-    try:
-        # 변경 대상 카운트 산출 (응답에 포함). 같은 상태인 행은 UPDATE 영향 0 이라 일치.
-        changed = conn.execute(
-            "SELECT COUNT(*) AS c FROM devices WHERE deleted_at IS NULL AND enabled <> ?",
-            (new_enabled,),
-        ).fetchone()["c"]
-        total_active = conn.execute(
-            "SELECT COUNT(*) AS c FROM devices WHERE deleted_at IS NULL"
-        ).fetchone()["c"]
+    return _bulk_set_flag("enabled", payload.enabled, user, payload.location)
 
-        # 일괄 UPDATE — partial unique 등 제약 영향 없음 (enabled 만 변경). 이력 INSERT 없음.
-        conn.execute(
-            """UPDATE devices
-                  SET enabled=?, updated_at=?, updated_by=?, updated_by_name=?
-                WHERE deleted_at IS NULL AND enabled <> ?""",
-            (new_enabled, now, user["id"], user["username"], new_enabled),
-        )
-        return {"ok": True, "changed": int(changed), "total": int(total_active)}
-    finally:
-        conn.close()
+
+@router.post("/devices/bulk_manual_enable")
+def bulk_manual_enable_devices(
+    payload: DeviceBulkEnable, user: CurrentUser = Depends(require_login)
+) -> dict:
+    """활성 장치의 `manual_enabled`(수동 수집 대상) 를 일괄 선택/해제 (DESIGN.md §5, §7.4).
+
+    location 미지정 시 전체, 지정 시 해당 설치 장소로 한정.
+    """
+    return _bulk_set_flag("manual_enabled", payload.enabled, user, payload.location)
 
 
 @router.delete("/devices/{device_pk}")
@@ -694,7 +762,8 @@ def list_jobs(
 def run_jobs_bulk(req: BulkJobRunRequest, user: CurrentUser = Depends(require_admin)) -> dict:
     """일괄 수동 수집 (DESIGN.md §7.4). **admin 전용**.
 
-    `[from, to]` 기간의 매일 × 활성 장치 전체를 백그라운드로 수집한다.
+    `[from, to]` 기간의 매일 × **수동 수집 대상(manual_enabled=1)** 장치 전체를 백그라운드로 수집한다.
+    자동 수집(enabled) 여부와 무관 — 수동 대상 플래그만 참조 (DESIGN.md §5, §7.4).
     최대 31일 (Aqara API 호출량·토큰 만료 위험 완화).
     응답 즉시 202 Accepted 반환 — 진행 상황은 `/jobs` 페이지에서 확인.
     """
@@ -717,10 +786,10 @@ def run_jobs_bulk(req: BulkJobRunRequest, user: CurrentUser = Depends(require_ad
             detail="Aqara refresh token 이 등록되지 않았습니다. 관리자가 /admin/token 에서 등록해야 합니다.",
         )
 
-    # 활성 장치 수 (예상 작업량 표시용)
-    devices = collector.list_active_devices()
+    # 수동 수집 대상 장치 수 (예상 작업량 표시용). 자동 수집(enabled) 과 독립 (DESIGN.md §5).
+    devices = collector.list_manual_devices()
     if not devices:
-        raise HTTPException(status_code=400, detail="활성 장치가 없습니다.")
+        raise HTTPException(status_code=400, detail="수동 수집 대상으로 지정된 장치가 없습니다.")
 
     # 작업 수 = 기간(일) × 활성 장치의 (device_type × hub 별 bundle 수) 총합.
     # DeviceType.bundles_by_hub 가 hub → tuple[Bundle, ...] 구조이므로 각 디바이스의 실제 hub

@@ -28,7 +28,7 @@
     </label>
     <label>표시 일수
       <select name="days">
-        {% for n in range(1, max_days + 1) %}
+        {% for n in day_options %}
           <option value="{{ n }}" {% if n == days %}selected{% endif %}>{{ n }}일</option>
         {% endfor %}
       </select>

@@ -245,31 +245,58 @@ def run_one_bundle(
 
 # ─────────────────────────── 일일 수집 / 보충 ───────────────────────────
 
-def list_active_devices() -> list[dict]:
-    """수집 대상 활성 기기 (deleted_at IS NULL AND enabled=1).
+def _list_devices_where(flag_column: str) -> list[dict]:
+    """수집 대상 기기 조회 공통 헬퍼 (deleted_at IS NULL AND <flag_column>=1).
 
-    CSV 메타 헤더(DESIGN.md §6.1)에 기록할 부가 정보(alias/install_location/install_date/created_by_name)도
-    함께 반환한다.
+    flag_column 은 내부 상수('enabled' | 'manual_enabled')로만 전달되며 사용자 입력이 아니다
+    (SQL injection 무관). CSV 메타 헤더(DESIGN.md §6.1)에 기록할 부가 정보도 함께 반환한다.
     """
     conn = get_connection()
     try:
         rows = conn.execute(
-            """SELECT device_id, device_type, hub, alias,
-                      install_location, install_date, created_by_name
-                 FROM devices
-                WHERE deleted_at IS NULL AND enabled=1
-                ORDER BY id"""
+            f"""SELECT device_id, device_type, hub, alias,
+                       install_location, install_date, created_by_name
+                  FROM devices
+                 WHERE deleted_at IS NULL AND {flag_column}=1
+                 ORDER BY id"""
         ).fetchall()
         return [dict(r) for r in rows]
     finally:
         conn.close()
 
 
-def collect_for_date(target_date: str, page_fetcher: PageFetcher | None = None) -> list[dict]:
-    """주어진 일자에 대해 모든 활성 기기 × 모든 bundle 수집."""
+def list_active_devices() -> list[dict]:
+    """자동 수집 대상 기기 (deleted_at IS NULL AND enabled=1).
+
+    매일 09:00 cron(collect_yesterday) 과 매시간 backfill 이 참조한다 (DESIGN.md §5).
+
+    hub='smartthings' 는 자동 수집을 지원하지 않으므로(§5) enabled 값과 무관하게 제외한다.
+    등록/편집/일괄 토글 단에서 이미 enabled=1 을 막지만, 과거 데이터·직접 DB 수정에 대비한 backstop.
+    """
+    return [d for d in _list_devices_where("enabled") if (d.get("hub") or "aqara") != "smartthings"]
+
+
+def list_manual_devices() -> list[dict]:
+    """수동 수집 대상 기기 (deleted_at IS NULL AND manual_enabled=1).
+
+    일괄 수동 수집(/api/jobs/bulk_run) 만 참조한다. enabled(자동) 와 독립 (DESIGN.md §5).
+    """
+    return _list_devices_where("manual_enabled")
+
+
+def collect_for_date(
+    target_date: str,
+    page_fetcher: PageFetcher | None = None,
+    devices: list[dict] | None = None,
+) -> list[dict]:
+    """주어진 일자에 대해 대상 기기 × 모든 bundle 수집.
+
+    devices=None 이면 자동 수집 대상(list_active_devices). 일괄 수동 수집은 수동 대상
+    (list_manual_devices) 을 명시적으로 전달한다 (DESIGN.md §7.4).
+    """
     config.ensure_dirs()
     results = []
-    for dev in list_active_devices():
+    for dev in (devices if devices is not None else list_active_devices()):
         dt = DEVICE_TYPES.get(dev["device_type"])
         if dt is None:
             results.append({"device": dev, "skipped": True, "reason": "unknown device_type"})
@@ -298,7 +325,10 @@ def collect_yesterday(page_fetcher: PageFetcher | None = None) -> list[dict]:
 def collect_date_range(
     from_date: str, to_date: str, page_fetcher: PageFetcher | None = None
 ) -> list[dict]:
-    """[from_date, to_date] 기간의 매일에 대해 활성 장치 전체 수집 (DESIGN.md §7.4 일괄 수동 수집).
+    """[from_date, to_date] 기간의 매일에 대해 수동 수집 대상 전체 수집 (DESIGN.md §7.4 일괄 수동 수집).
+
+    대상은 **manual_enabled=1** 장치 (list_manual_devices) — 자동 수집(enabled) 과 독립.
+    기간 전체에서 동일한 대상 목록을 쓰도록 진입 시 1회 조회한다 (도중 토글돼도 일관 유지).
 
     백그라운드 스레드에서 호출되는 워커. 각 (device, bundle, date) 의 결과는 collection_jobs 에
     그대로 기록되므로 별도 진행 상태 저장은 불필요 — `/jobs` 페이지에서 확인.
@@ -312,11 +342,12 @@ def collect_date_range(
     if end < start:
         raise ValueError(f"to({to_date}) is before from({from_date})")
     config.ensure_dirs()
+    manual_devices = list_manual_devices()
     all_results: list[dict] = []
     cur = start
     while cur <= end:
         d_str = cur.strftime("%Y-%m-%d")
-        results = collect_for_date(d_str, page_fetcher=page_fetcher)
+        results = collect_for_date(d_str, page_fetcher=page_fetcher, devices=manual_devices)
         all_results.extend(results)
         cur += _td(days=1)
     return all_results
@@ -410,12 +441,25 @@ def _make_dry_run_fetcher() -> PageFetcher:
         ("13:53:46", "93"), ("13:56:17", "92"),
     ]
 
+    # smart_plug_eu 단일 wide bundle(plug_status) dry-run 샘플 (DEVICE.md §11):
+    #   4.1.85 plug_status(on/off 이벤트), 0.12.85 load_power(W), 0.13.85 cost_energy(0.001kWh raw, 단조 증가).
+    # 세 resource 의 보고 시각이 어긋나는 상황(전력만 있는 시각·on/off 만 있는 시각)을 재현해 wide join 을 점검.
+    plug_pairs = [("08:00:00", "1"), ("08:02:30", "0")]
+    power_pairs = [("08:00:03", "45.2"), ("08:01:03", "44.8"), ("08:02:03", "0.0")]
+    energy_pairs = [("08:00:03", "12030"), ("08:01:03", "12031"), ("08:02:03", "12031")]
+
     def fetcher(device_id: str, resource_id: str, start_kst: str, end_kst: str) -> list[tuple[str, str]]:
         date_prefix = start_kst.split(" ")[0]
         if resource_id == "3.1.85":
             return [(f"{date_prefix} {t}", "1") for t in motion_times]
         if resource_id == "0.3.85":
             return [(f"{date_prefix} {t}", v) for t, v in lux_pairs]
+        if resource_id == "4.1.85":
+            return [(f"{date_prefix} {t}", v) for t, v in plug_pairs]
+        if resource_id == "0.12.85":
+            return [(f"{date_prefix} {t}", v) for t, v in power_pairs]
+        if resource_id == "0.13.85":
+            return [(f"{date_prefix} {t}", v) for t, v in energy_pairs]
         return []
 
     return fetcher

@@ -25,13 +25,17 @@
 | 4 | Vibration Sensor T1 | 진동 센서 T1 | `lumi.vibration.agl01` | aqara · smartthings | `move_detect` (`13.7.85`) | `accelerationSensor.acceleration` | 움직임 감지 |
 | 5 | Wireless Mini Switch T1 | 무선 미니 스위치 T1 | `lumi.remote.b1acn02` | aqara · smartthings | `switch_status` (`13.1.85`) | `button.button` | 스위치 클릭 |
 | 6 | Vibration Sensor (aq1) | 진동 센서 (aq1) | `lumi.vibration.aq1` | aqara only | `vibration_event` (`13.1.85`) | — | 진동 이벤트(통합) |
-| 7 | Motion and Light Sensor P2 | Aqara 모션·조도 센서 P2 | (Matter, Aqara 측 모델명 무관) | **smartthings only** | — | `motionSensor.motion` + `illuminanceMeasurement.illuminance` | 모션 + 조도 |
+| 7 | Motion and Light Sensor P2 | 모션 센서 P2 | (Matter, Aqara 측 모델명 무관) | **smartthings only** | — | `motionSensor.motion` + `illuminanceMeasurement.illuminance` | 모션 + 조도 |
 | 8 | Temperature and Humidity Sensor T1 | 온습도 센서 T1 | `lumi.sensor_ht.agl02` | aqara · smartthings | `temperature_value` (`0.1.85`) | `temperatureMeasurement.temperature` | 온도 (°C, 주기 측정) |
 | 8 | Temperature and Humidity Sensor T1 | 온습도 센서 T1 | `lumi.sensor_ht.agl02` | aqara · smartthings | `humidity_value` (`0.2.85`) | `relativeHumidityMeasurement.humidity` | 상대습도 (%, 주기 측정) |
 | 9 | Motion and Light Sensor (Watts Matter) | 모션 센서 (와츠매터) | (Matter) | **smartthings only** | — | `motionSensor.motion` + `illuminanceMeasurement.illuminance` | 모션 + 조도 |
 | 10 | Temperature and Humidity Sensor (Watts Matter) | 온습도 센서 (와츠매터) | (Matter) | **smartthings only** | — | `temperatureMeasurement.temperature` + `relativeHumidityMeasurement.humidity` | 온도 + 상대습도 (주기 측정) |
+| 11 | Smart Plug EU | 스마트 플러그 EU | `lumi.plug.maeu01` | aqara · smartthings | `plug_status` (`4.1.85`) | `switch.switch` | 전원 on/off |
+| 11 | Smart Plug EU | 스마트 플러그 EU | `lumi.plug.maeu01` | aqara · smartthings | `load_power` (`0.12.85`) | `powerMeter.power` | 순시 동작 전력 (W, 주기 측정) |
+| 11 | Smart Plug EU | 스마트 플러그 EU | `lumi.plug.maeu01` | aqara · smartthings | `cost_energy` (`0.13.85`) | `energyMeter.energy` | 누적 소비 전력량 (aqara=0.001kWh 단위, 주기 측정) |
+| 12 | Water Leak Sensor T1 | 누수 센서 T1 | `lumi.flood.agl02` | aqara · smartthings | `leak_status` (`3.1.85`) | `waterSensor.water` | 누수 감지 (0=정상, 1=누수) |
 
-> SmartThings 측 값 인코딩은 Aqara 와 다름: motion `active`/`inactive` (Aqara=`1`만), contact `open`/`closed` (Aqara=`1`/`0`), button `pushed`/`held` 등 (Aqara=숫자 코드). 추출 로직은 hub 별로 분기 ([app/display_extract.py](app/display_extract.py)). 온습도(`temp_humi_t1`)는 양 hub 모두 부동소수 측정값을 그대로 보고하므로 컬럼명·해석 모두 통일.
+> SmartThings 측 값 인코딩은 Aqara 와 다름: motion `active`/`inactive` (Aqara=`1`만), contact `open`/`closed` (Aqara=`1`/`0`), button `pushed`/`held` 등 (Aqara=숫자 코드), switch `on`/`off` (Aqara plug=`0`/`1`/`2`). 추출 로직은 hub 별로 분기 ([app/display_extract.py](app/display_extract.py)). 온습도(`temp_humi_t1`)는 양 hub 모두 부동소수 측정값을 그대로 보고하므로 컬럼명·해석 모두 통일.
 
 ---
 
@@ -79,18 +83,6 @@ Motion Sensor T1은 `motion_status`와 `lux`를 **하나의 CSV** 로 합쳐 저
   time,motion_status,lux
   2026-05-11 13:10:08,1,5
   2026-05-11 13:11:06,1,97
-  2026-05-11 13:14:35,1,97
-  2026-05-11 13:16:05,1,93
-  2026-05-11 13:17:29,1,93
-  2026-05-11 13:22:14,1,93
-  2026-05-11 13:40:11,1,94
-  2026-05-11 13:41:13,1,93
-  2026-05-11 13:42:16,1,93
-  2026-05-11 13:43:14,1,92
-  2026-05-11 13:44:57,1,91
-  2026-05-11 13:51:46,,91
-  2026-05-11 13:53:46,1,93
-  2026-05-11 13:56:17,1,92
   ```
 
   → 13:51:46 행은 `motion_status` 컬럼이 비어있고 `lux=91`. (lux만 단독으로 기록된 샘플)
@@ -212,7 +204,6 @@ time,move_detect,knock_event
 2026-02-10 05:08:00,1,
 2026-02-10 05:08:00,255,
 2026-02-10 09:31:00,,1
-2026-02-10 09:31:00,,255
 ```
 
 → 05:08:00의 두 행은 움직임 감지·해지, 09:31:00의 두 행은 두드림 이벤트(값 자체는 source에 따라 다름).
@@ -234,7 +225,7 @@ time,move_detect,knock_event
 | **smartthings** | `button.button` | `button` | `pushed` / `held` / `double` 등 문자열 |
 
 > bundle key 는 양 hub 공통(`switch_status`)이지만 컬럼명·값 인코딩이 다르다.
-> Aqara 숫자 코드(1·2·3·16·17·18) ↔ SmartThings 문자열 매핑 통합 해석은 [app/display_extract.py](app/display_extract.py) 의 hub 별 분기에서 처리 (raw 값은 CSV 에 그대로 적재).
+> SmartThings `button` 값(`pushed`/`held`/`double` 등)은 **수집만 지원**된다(raw 값은 CSV 에 그대로 적재). 현재 디스플레이(`/display`)에는 `switch_t1` 의 hub 분기가 구현되어 있지 않아, SmartThings 허브 스위치는 Aqara 코드 전용 추출기(`extract_switch_long_intervals`/`extract_switch_point_events`, `switch_status` 컬럼·숫자 코드만 매칭)를 타므로 빈 트랙으로 렌더된다. Aqara 숫자 코드(1·2·3·16·17·18) ↔ SmartThings `button` 문자열의 통합 해석 및 `button` 트랙 시각화는 후속 작업이다(door/plug/water 처럼 `extract_st_button_*` 대응 함수가 아직 없음).
 
 ### 5.1 동작 특성
 - **이벤트 기반** 기록: 사용자가 스위치를 조작할 때마다 1회씩 기록된다 (주기 샘플링 아님).
@@ -260,8 +251,6 @@ time,switch_status
 2026-05-12 09:14:22,1
 2026-05-12 09:14:25,2
 2026-05-12 10:02:11,16
-2026-05-12 10:02:13,17
-2026-05-12 14:30:00,18
 ```
 
 → 09:14:22 클릭, 09:14:25 더블 클릭, 10:02:11~13 약 2초간 롱 프레스, 14:30:00 흔들림.
@@ -312,7 +301,6 @@ time,vibration_event
 2026-05-12 03:14:00,3
 2026-05-12 09:00:00,2
 2026-05-12 09:00:30,5
-2026-05-12 12:00:00,6
 ```
 
 → 새벽 자유 낙하, 오전 기울임 후 30초 뒤 가져감, 정오에 세 번 두드림.
@@ -436,6 +424,123 @@ time,temperature_value,humidity_value
 
 ---
 
+## 11. Smart Plug EU (스마트 플러그 EU)
+
+- **device_type 키**: `smart_plug_eu`
+- **Model**: `lumi.plug.maeu01` (Aqara Smart Plug EU)
+- **지원 hub**: `aqara` · `smartthings` (디바이스 등록 시 선택)
+
+스마트 플러그는 on/off 와 전력을 **하나의 wide bundle `plug_status`** 로 함께 수집한다 (motion_lux §1 와 동일한 event+periodic 혼합 패턴). 전력도 매일 보고되는 것은 아니므로 on/off 와 별 bundle 로 나눠 수집 성패를 따로 판정할 실익이 없다.
+
+- `plug_status`(on/off) 는 전원 상태가 바뀔 때만 기록되는 **이벤트**.
+- `load_power`/`cost_energy`(전력) 는 heartbeat 시 보고되는 **주기 측정**(단, 상시 보고 아님 — 0건 가능).
+
+### Hub 별 resource·CSV 컬럼 매핑
+
+단일 bundle `plug_status` — timestamp outer join wide CSV. 컬럼: `time, <on/off>, load_power, cost_energy`.
+
+| Hub | resource id / capability.attribute | CSV 컬럼명 | 값 인코딩 |
+|---|---|---|---|
+| **aqara** | `plug_status` (`4.1.85`) | `plug_status` | `0`=Close(꺼짐) / `1`=Open(켜짐) / `2`=Toggle(상태 반전) |
+| **aqara** | `load_power` (`0.12.85`) | `load_power` | 순시 동작 전력, 단위 **W** (기기 보고 원값) |
+| **aqara** | `cost_energy` (`0.13.85`) | `cost_energy` | 누적 소비 전력량, 단위 **0.001kWh** (raw × 0.001 = kWh, 단조 증가 카운터) |
+| **smartthings** | `switch.switch` | `switch` | `on` / `off` |
+| **smartthings** | `powerMeter.power` | `load_power` | 순시 전력, 단위 **W** |
+| **smartthings** | `energyMeter.energy` | `cost_energy` | 누적 소비 전력량, 단위 **kWh** (변환 불필요) |
+
+> bundle key 는 양 hub 공통(`plug_status`)이지만 on/off 컬럼명·값 인코딩이 다르다(aqara `plug_status` 0/1/2 vs smartthings `switch` on/off). 전력 컬럼명(`load_power`/`cost_energy`)은 양 hub 통일. on/off 통합 해석(on↔1, off↔0)과 전력 단위 통합(aqara `cost_energy` raw×0.001 → kWh)은 [app/display_extract.py](app/display_extract.py) hub 별 분기에서 처리하며, 폴더는 device_id 로 격리되어 schema 충돌이 없다.
+>
+> ⚠️ CSV 에는 **기기 보고 원값(raw) 그대로** 저장한다 (kWh 변환은 표시 단계에서만). 따라서 aqara `cost_energy` 컬럼은 0.001kWh 정수 단위임에 유의.
+>
+> ℹ️ 기존 2컬럼(`time,plug_status`) CSV 와 하위 호환: 추출기는 컬럼명으로 값을 읽으므로 전력 컬럼이 없던 과거 파일은 전력 시계열이 빈 상태로 자연 처리된다.
+
+### 11.1 동작 특성
+- **event+periodic 혼합**(motion_lux 와 동일): `plug_status`(on/off) 는 상태 전환 시에만, `load_power`/`cost_energy`(전력) 는 heartbeat 시 기록된다.
+- **일별 행 수 0건은 정상** (수집 실패 아님): on/off 전환이 없고 전력 보고도 없으면 그날 CSV 는 0건일 수 있다. 전력이 상시 보고되는 것은 아니므로 temp_humi 처럼 "0건=실패" 로 단정하지 않는다.
+- 세 resource 의 보고 시각은 어긋날 수 있어 timestamp outer join 으로 wide 저장되며, 특정 시각에 없는 컬럼은 빈 문자열(`,,`)이다.
+
+### 11.2 값 의미
+| Value (aqara) | 의미 |
+|---|---|
+| `0` | Close — 꺼짐 (전원 차단) |
+| `1` | Open — 켜짐 (전원 공급) |
+| `2` | Toggle — 현재 상태를 반전 (직전 상태의 반대로 전환) |
+
+> ⚠️ 값 의미 매핑은 사용자 제공 명세(`Socket open/close, 0: Close, 1: Open, 2: Toggle`)를 그대로 따른다 (수집·저장 기준). `1`(Open)=켜짐 시작, `0`(Close)=종료, `2`(Toggle)=직전 상태 반전. **단 현재 /display 화면은 이 on/off 상태를 그리지 않고 `load_power` line plot 만 표시한다** (수집만, DISPLAY.md §4.9).
+>
+> SmartThings 측 `switch` 값은 `on`↔`1`(켜짐), `off`↔`0`(꺼짐) 으로 의미가 정확히 대응한다. SmartThings 에는 toggle 값이 없다 (항상 절대 상태 on/off 로 보고).
+
+### 11.3 CSV 저장 형식
+on/off + 전력을 한 wide CSV 에 timestamp outer join 저장. 컬럼: `time, plug_status, load_power, cost_energy` (aqara) / `time, switch, load_power, cost_energy` (smartthings).
+
+```csv
+time,plug_status,load_power,cost_energy
+2026-05-12 08:00:00,1,,
+2026-05-12 08:00:03,,45.2,12030
+2026-05-12 08:01:03,,44.8,12031
+2026-05-12 08:02:03,,0.0,12031
+2026-05-12 08:02:30,0,,
+```
+
+→ aqara 예시. 08:00:00 켜짐(on) → 08:02:30 꺼짐(off). 그 사이 전력 heartbeat 3건: `load_power` 45.2→44.8→0.0 W, `cost_energy` 12030→12031(=12.030→12.031kWh). on/off 이벤트 행과 전력 heartbeat 행은 시각이 달라 각자 컬럼만 채워지고 나머지는 빈 칸(`,,`). 세 컬럼 모두 raw 로 저장하되, 현재 /display 화면은 `load_power` 만 표시하고 on/off·`cost_energy` 는 수집만 한다 ([DISPLAY.md §4.9](DISPLAY.md#49-smart-plug-eu-smart_plug_eu)).
+
+**저장 경로**: `data/plug_status/{device_id}/{YYYYMMDD}_{suffix}.csv` (suffix 는 hub 별 분기 — Aqara 끝 6자리 / SmartThings 첫 8자리, [부록 A](#부록-a-api-호출-파라미터-매핑) 참조).
+
+### 11.4 후처리 주의
+- **on/off**: 두 이벤트(켜짐 → 꺼짐) 사이의 **켜짐 지속 시간(duration)** 은 별도 계산이 필요하다 (door_t1 §2.4 와 동일). 일자 경계를 넘어 켜진 상태가 지속될 수 있으므로 일 단위 CSV 만으로는 on/off 쌍이 완결되지 않을 수 있다 (디스플레이는 직전 일자 CSV 로 경계 복원). `2`(Toggle) 는 절대 상태가 아니라 상대 전환이므로 직전 상태를 알 수 없으면 그 시점의 on/off 를 확정할 수 없다 → 디스플레이 "경계 추정" 처리 ([DISPLAY.md §9](DISPLAY.md#9-빈-일자--부분-수집--오류-케이스)).
+- **전력**: `load_power` 는 순시 W (꺼짐 시 0 근처). `cost_energy` 는 단조 증가 카운터이므로 **일간 소비량은 (해당 일 마지막 − 첫) 차이**로 계산한다. 전력이 상시 보고되는 것은 아니어서 특정 일자에 전력 샘플이 0건일 수 있다 (정상).
+
+---
+
+## 12. Water Leak Sensor T1 (누수 센서 T1)
+
+- **device_type 키**: `water_leak_t1`
+- **Model**: `lumi.flood.agl02` (Aqara Water Leak Sensor T1)
+- **지원 hub**: `aqara` · `smartthings` (디바이스 등록 시 선택)
+
+### Hub 별 resource·CSV 컬럼 매핑
+
+| Hub | resource id / capability.attribute | CSV 컬럼명 | 값 인코딩 |
+|---|---|---|---|
+| **aqara** | `leak_status` (`3.1.85`) | `leak_status` | `1`=누수 / `0`=정상(누수 없음) |
+| **smartthings** | `waterSensor.water` | `water` | `wet` / `dry` |
+
+> bundle key 는 양 hub 공통(`leak_status`)이지만 컬럼명·값 인코딩이 다르다. door_t1 (§2) 과 동일한 이진 상태 센서로, `1`/`wet`(누수 시작) → `0`/`dry`(누수 해소) 페어로 "누수 지속 구간"을 표현한다. 통합 해석(wet↔1, dry↔0)·일자 경계 복원은 door_t1 과 완전히 같은 패턴이며 [app/display_extract.py](app/display_extract.py) 의 hub 별 분기에서 처리한다. 폴더는 device_id 로 격리되어 schema 충돌 없음.
+
+### 12.1 동작 특성
+- **이벤트 기반** 기록: 누수 상태가 바뀔 때마다 **1회씩** 기록된다 (주기 샘플링 아님). door_t1 (§2) 과 같은 이진 상태 센서다.
+- 따라서 일별 데이터 행 수는 해당 일자에 발생한 상태 전환 횟수와 동일. 하루 종일 정상(누수 없음)이면 그날 행 수가 0건일 수 있다 (정상 — 수집 실패 아님).
+
+### 12.2 값 의미
+| Value | 의미 |
+|---|---|
+| `0` | No water leak — 정상 (누수 없음) |
+| `1` | Water leak — 누수 감지 |
+
+> ⚠️ 값 의미 매핑은 사용자 제공 명세(`Water leak status, 0: No water leak, 1: Water leak`)를 그대로 따른다. 디스플레이(DISPLAY.md §4.10)는 **`1`(누수)=누수 지속 구간**을 막대로 그리고 `0`(정상)에서 종료한다 (door_t1 의 열림 구간과 동일 패턴).
+>
+> SmartThings 측 `water` 값은 `wet`↔`1`(누수), `dry`↔`0`(정상) 으로 의미가 정확히 대응한다. SmartThings 에는 toggle 값이 없어 door 의 `contact` 와 완전히 같은 페어 패턴이다.
+
+### 12.3 CSV 저장 형식
+단일 resource 이므로 하나의 CSV 에 단순 저장. 컬럼: `time, leak_status` (aqara) / `time, water` (smartthings).
+
+```csv
+time,leak_status
+2026-05-12 03:14:00,1
+2026-05-12 03:47:20,0
+```
+
+→ 03:14:00 누수 감지 → 03:47:20 정상 복귀. 약 33분간 누수 상태였다는 의미.
+
+**저장 경로**: `data/leak_status/{device_id}/{YYYYMMDD}_{suffix}.csv` (suffix 는 hub 별 분기 — Aqara 끝 6자리 / SmartThings 첫 8자리, [부록 A](#부록-a-api-호출-파라미터-매핑) 참조).
+
+### 12.4 후처리 주의
+- 두 이벤트(누수 → 정상) 사이의 **누수 지속 시간(duration)** 은 별도 계산이 필요하다 (door_t1 §2.4 와 동일).
+- 일자 경계를 넘어 누수 상태가 지속될 수 있으므로 일 단위 CSV 만으로는 누수 쌍이 완결되지 않을 수 있다 (전후 일자 CSV 를 함께 확인 — 디스플레이는 직전 일자 CSV 로 경계 복원).
+- SmartThings 측 `water` 값은 door 의 `contact` (open/closed) 와 동일한 페어 패턴(`wet`/`dry`)이며 짝 없는 `dry` 는 안전 스킵한다.
+
+---
+
 ## 부록 A. API 호출 파라미터 매핑
 
 Aqara Open API `fetch.resource.history` 호출 시 사용:
@@ -484,8 +589,8 @@ smartthings devices:history <deviceId> \
 
 ## 부록 B. 운영 메모
 
-- **이벤트 기반 센서**(Door and Window Sensor T1, Vibration Sensor T1, Wireless Mini Switch T1, Vibration Sensor aq1)는 일별 행 수가 0건일 수 있다. 이는 정상이며 수집 실패가 아님.
-- **주기성+이벤트 혼합 센서**(Motion T1/P1)는 occupied 시간 비중에 따라 일별 행 수 편차가 크다.
+- **이벤트 기반 센서**(Door and Window Sensor T1, Vibration Sensor T1, Wireless Mini Switch T1, Vibration Sensor aq1, Water Leak Sensor T1)는 일별 행 수가 0건일 수 있다. 이는 정상이며 수집 실패가 아님.
+- **주기성+이벤트 혼합 센서**(Motion T1/P1, Smart Plug EU)는 일별 행 수 편차가 크며 0건도 정상이다. Smart Plug 는 on/off 이벤트 + 전력 heartbeat 를 한 bundle(`plug_status`)로 수집하되, 전력이 상시 보고되는 것은 아니므로 0건을 실패로 단정하지 않는다.
 - **주기 측정 센서**(Temperature and Humidity Sensor T1)는 24시간 내내 보고되므로 일별 행 수가 0건이면 수집 실패·디바이스 무응답을 의심해야 한다.
 - 모든 시각은 CSV 저장 시점에 **KST**로 변환되어 기록된다.
-- 일자 경계를 횡단하는 "시작↔해지" 페어가 있는 센서(Door T1 `1↔0`, Vibration T1 `1↔255` move_detect, Switch T1 `16↔17` long press)는 디스플레이 단계에서 직전 일자 CSV로 경계를 복원한다 ([DISPLAY.md §4.7](DISPLAY.md#47-디바이스-타입--bundle-매핑) 매핑표).
+- 일자 경계를 횡단하는 "시작↔해지" 페어가 있는 센서(Door T1 `1↔0`, Vibration T1 `1↔255` move_detect, Switch T1 `16↔17` long press, Water Leak Sensor T1 `1↔0` 누수/정상)는 디스플레이 단계에서 직전 일자 CSV로 경계를 복원한다 ([DISPLAY.md §4.7](DISPLAY.md#47-디바이스-타입--bundle-매핑) 매핑표). Smart Plug EU 의 on/off 는 수집만 하고 표시하지 않으므로 경계 복원 대상이 아니다 (현재 /display 는 load_power 만, DISPLAY.md §4.9).

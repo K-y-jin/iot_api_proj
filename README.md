@@ -19,6 +19,7 @@ Aqara Open API + SmartThings (OAuth 2.0) 두 허브에서 매일 1회 전일자 
 | `switch_t1` | `lumi.remote.b1acn02` | 무선 미니 스위치 T1 | aqara · smartthings | `button.button` 대응 |
 | `vibration_aq1` | `lumi.vibration.aq1` | 진동 센서 (aq1) | aqara only | 단일 resource 통합 코드 |
 | `temp_humi_t1` | `lumi.sensor_ht.agl02` | 온습도 센서 T1 | aqara · smartthings | 부동소수 측정값, 디스플레이는 line plot |
+| `water_leak_t1` | `lumi.flood.agl02` | 누수 센서 T1 | aqara · smartthings | 이진 상태(1=누수/0=정상, `waterSensor.water` wet/dry), door_t1 과 동일 패턴 |
 
 같은 device_type 이라도 hub 가 다르면 CSV 컬럼·디스플레이 추출 알고리즘이 분기된다 ([DEVICE.md §0 요약표](DEVICE.md#0-요약표), [DISPLAY.md §4.7 매핑표](DISPLAY.md#47-디바이스-타입--bundle-매핑)).
 

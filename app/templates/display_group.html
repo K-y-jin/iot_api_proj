@@ -2,8 +2,9 @@
 {% block title %}{{ group.name }} 그룹 타임라인 · IoT{% endblock %}
 {% block content %}
 {# 그룹 디스플레이 (DISPLAY.md §4.8).
-   같은 device_type 멤버는 한 패널로 합산(이벤트 합집합), 다른 종류는 별도 패널.
-   각 패널의 트랙은 _device_timeline.html partial 로 렌더 — 단일 디바이스 화면과 동일 마크업. #}
+   같은 device_type 멤버는 한 패널·한 트랙에 멤버별 고유 색으로 반투명 오버레이(합집합 아님),
+   다른 종류는 별도 패널. 각 패널의 트랙은 _device_timeline.html partial 로 렌더 — 단일 디바이스
+   화면과 동일 마크업이되 그룹은 track.members 가 채워져 멤버 색 오버레이 모드로 동작. #}
 
 <section class="card">
   <h1>그룹: {{ group.name }} <span class="muted">(멤버 {{ members|length }}개)</span></h1>
@@ -19,7 +20,7 @@
     </label>
     <label>표시 일수
       <select name="days">
-        {% for n in range(1, max_days + 1) %}
+        {% for n in day_options %}
           <option value="{{ n }}" {% if n == days %}selected{% endif %}>{{ n }}일</option>
         {% endfor %}
       </select>
@@ -45,17 +46,24 @@
   <section class="card timeline-card">
     <h2>
       {% if device_type %}{{ device_type.display_name_ko }}{% else %}{{ panel.type_key }}{% endif %}
-      <span class="muted">— {{ panel.devices|length }}개 멤버 합산</span>
+      <span class="muted">— 멤버 {{ panel.devices|length }}개 (색 구분)</span>
     </h2>
-    <p class="muted">
-      멤버:
-      {% for d in panel.devices %}
-        <a href="/display/{{ d.device_id }}?to={{ to }}&days={{ days }}">{{ d.alias or d.device_id_upper }}</a>{% if not loop.last %} · {% endif %}
+    {# 멤버→색 범례 (DISPLAY.md §4.8). swatch 색은 _build_group_panels 가 정렬 순서대로 배정한
+       --member-N 변수 (트랙 오버레이 색과 일치). 멤버명은 단일 디바이스 화면 링크. #}
+    <div class="legend member-legend">
+      <span class="legend-item muted">멤버:</span>
+      {% for ml in panel.member_legend %}
+        <span class="legend-item">
+          <span class="swatch member" style="background: {{ ml.color }}"></span>
+          <a href="/display/{{ ml.device_id }}?to={{ to }}&days={{ days }}">{{ ml.label }}</a>
+        </span>
       {% endfor %}
-    </p>
+    </div>
     {% if device_type %}
       {# 패널마다 해당 device_type 범례 (Bar/Point/Plot 설명) — 단일 화면과 동일 partial.
-         그룹은 멤버 hub 가 혼재할 수 있어 dummy device 에 hub 키가 없다 → lux 항목은 항상 표기됨. #}
+         그룹은 멤버 hub 가 혼재할 수 있어 dummy device 에 hub 키가 없다 → lux 항목은 항상 표기됨.
+         legend_neutral=true: 그룹은 막대가 멤버 색이라 타입색 swatch 를 숨긴다 (색=멤버 범례, DISPLAY.md §4.8). #}
+      {% set legend_neutral = true %}
       {% include "_timeline_legend.html" %}
       {% include "_device_timeline.html" %}
     {% else %}

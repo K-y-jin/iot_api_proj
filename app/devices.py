@@ -107,6 +107,24 @@ _ST_BUTTON_BUNDLES: tuple[Bundle, ...] = (
     ),
 )
 
+# SmartThings 측 스마트 플러그 bundle (DEVICE.md §11).
+# bundle key 는 aqara 측("plug_status")과 동일하게 유지해 device_type 내 통일.
+# 단일 wide bundle: on/off(switch) + 전력 주기 측정(load_power/cost_energy) 을 한 CSV 로 (motion_lux 와 동일).
+# CSV 컬럼명은 on/off 는 SmartThings 표준명("switch", 값 'on'/'off'), 전력은 aqara 와 통일한 컬럼명
+# (load_power W / cost_energy kWh). 값 인코딩만 hub 별로 다르며(aqara plug 0/1/2·cost_energy 0.001kWh raw)
+# 통합 해석은 display_extract.py 단계에서 처리한다.
+_ST_SWITCH_BUNDLES: tuple[Bundle, ...] = (
+    Bundle(
+        key="plug_status",
+        resources=(
+            Resource("switch.switch", "switch", "전원 상태 (on/off)"),
+            Resource("powerMeter.power", "load_power", "순시 전력 (W)"),
+            Resource("energyMeter.energy", "cost_energy", "누적 소비 전력량 (kWh)"),
+        ),
+        csv_columns=("time", "switch", "load_power", "cost_energy"),
+    ),
+)
+
 # SmartThings 측 도어/창 센서 bundle (DEVICE.md §2).
 # bundle key 는 aqara 측("magnet_status")과 동일. CSV 컬럼은 SmartThings 표준명("contact"),
 # 값은 'open'/'closed' 문자열 그대로 저장 (Aqara 1/0 과의 의미 매핑은 display 단계 분기).
@@ -130,6 +148,19 @@ _ST_ACCELERATION_BUNDLES: tuple[Bundle, ...] = (
             Resource("accelerationSensor.acceleration", "acceleration", "가속도 감지 (active/inactive)"),
         ),
         csv_columns=("time", "acceleration"),
+    ),
+)
+
+# SmartThings 측 누수 센서 bundle (DEVICE.md §12).
+# bundle key 는 aqara 측("leak_status")과 동일. CSV 컬럼은 SmartThings 표준명("water"),
+# 값은 'wet'/'dry' 문자열 그대로 저장 (Aqara 1/0 과의 의미 매핑은 display 단계 분기 — door_t1 과 동일 패턴).
+_ST_WATER_BUNDLES: tuple[Bundle, ...] = (
+    Bundle(
+        key="leak_status",
+        resources=(
+            Resource("waterSensor.water", "water", "누수 상태 (wet/dry)"),
+        ),
+        csv_columns=("time", "water"),
     ),
 )
 
@@ -310,6 +341,57 @@ DEVICE_TYPES: dict[str, DeviceType] = {
                     csv_columns=("time", "temperature_value", "humidity_value"),
                 ),
             ),
+        },
+    ),
+    # ─── Smart Plug EU — Aqara 또는 SmartThings(switch.switch) ───
+    # door_t1 과 동일한 이진 상태 센서 (켜짐/꺼짐). 의미 대응: aqara plug_status 1(Open) ↔
+    # smartthings switch 'on', 0(Close) ↔ 'off' (DEVICE.md §11). aqara 는 2(Toggle) 값이 추가로
+    # 존재하며 상태 반전을 의미 — 통합 해석은 display_extract.py 의 hub 별 분기에서 처리.
+    "smart_plug_eu": DeviceType(
+        key="smart_plug_eu",
+        model="lumi.plug.maeu01",
+        display_name="Smart Plug EU",
+        display_name_ko="스마트 플러그 EU",
+        # on/off 이벤트 + 전력 주기 측정을 한 wide bundle 로 (motion_lux 와 동일한 event+periodic 혼합).
+        # 전력도 매일 보고되는 것은 아니므로(사용자 확인) plug_status bundle 0건은 정상 — 별 bundle 로
+        # 나눠 수집 성패를 따로 판정할 필요가 없다 (DEVICE.md §11.1).
+        sampling="event+periodic",
+        bundles_by_hub={
+            "aqara": (
+                # 단일 wide bundle: 4.1.85 on/off + 0.12.85 순시전력 + 0.13.85 누적전력량.
+                # raw 저장 — cost_energy 는 0.001kWh 정수 단위, kWh 환산은 표시 단계에서만 (DEVICE.md §11).
+                Bundle(
+                    key="plug_status",
+                    resources=(
+                        Resource("4.1.85", "plug_status", "소켓 개폐 상태 (0=꺼짐/1=켜짐/2=토글)"),
+                        Resource("0.12.85", "load_power", "순시 동작 전력 (W)"),
+                        Resource("0.13.85", "cost_energy", "누적 소비 전력량 (0.001kWh)"),
+                    ),
+                    csv_columns=("time", "plug_status", "load_power", "cost_energy"),
+                ),
+            ),
+            "smartthings": _ST_SWITCH_BUNDLES,
+        },
+    ),
+    # ─── Water Leak Sensor T1 — Aqara 또는 SmartThings(waterSensor.water) ───
+    # door_t1 과 동일한 이진 상태 센서 (누수/정상). 의미 대응: aqara leak_status 1(누수) ↔
+    # smartthings water 'wet', 0(정상) ↔ 'dry'. smart_plug_eu 와 달리 toggle 값이 없어
+    # door 와 100% 동일한 상태머신 (DEVICE.md §12).
+    "water_leak_t1": DeviceType(
+        key="water_leak_t1",
+        model="lumi.flood.agl02",
+        display_name="Water Leak Sensor T1",
+        display_name_ko="누수 센서 T1",
+        sampling="event",
+        bundles_by_hub={
+            "aqara": (
+                Bundle(
+                    key="leak_status",
+                    resources=(Resource("3.1.85", "leak_status", "누수 감지 상태 (0=정상/1=누수)"),),
+                    csv_columns=("time", "leak_status"),
+                ),
+            ),
+            "smartthings": _ST_WATER_BUNDLES,
         },
     ),
     # ─── Temperature and Humidity Sensor (Watts Matter) — SmartThings(Matter) only ───

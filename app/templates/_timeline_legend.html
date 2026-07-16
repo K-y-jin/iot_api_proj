@@ -1,38 +1,59 @@
 {# 디바이스 타임라인 범례 — 단일 디바이스(display.html)·그룹 패널(display_group.html) 공용.
 
    기대 컨텍스트:
-     device_type : DEVICE_TYPES[...] DeviceType (필수)
-     device      : devices 행 dict (선택). hub 조건부 항목 판정에 사용.
-                   그룹 패널은 dummy device 라 hub 키가 없음 → hub 미상으로 간주.
+     device_type    : DEVICE_TYPES[...] DeviceType (필수)
+     device         : devices 행 dict (선택). hub 조건부 항목 판정에 사용.
+                      그룹 패널은 dummy device 라 hub 키가 없음 → hub 미상으로 간주.
+     legend_neutral : (선택) 그룹 패널에서 true. 색 swatch 를 숨기고 의미 텍스트만 남긴다
+                      (DISPLAY.md §4.8). 그룹은 막대·틱·선이 타입색이 아니라 멤버 색으로 그려지므로
+                      타입색 swatch 를 보이면 멤버 범례와 어긋난다 → 멤버 범례가 색의 SSOT.
 
    Bar = 막대(지속 구간) · Point = 점(순간 이벤트) · Plot = 연속 측정값 선그래프.
 #}
 {% set _hub = device.hub if (device is defined and device and device.hub) else None %}
+{# swatch 매크로: 그룹 모드(legend_neutral)면 색 swatch 를 생략하고 텍스트만 출력. #}
+{% macro sw(cls) -%}
+{%- if not legend_neutral %}<span class="swatch {{ cls }}"></span> {% endif -%}
+{%- endmacro %}
+{# swm: metric 색 swatch 를 그룹 모드에서도 항상 출력. 온습도 plot 은 그룹/설치장소 화면에서도
+   멤버 색이 아니라 metric 색(온도=빨강·습도=파랑)으로 그리므로(개별 보기와 통일, DISPLAY.md §4.6)
+   그 범례 swatch 는 legend_neutral 여도 숨기지 않는다. #}
+{% macro swm(cls) -%}
+<span class="swatch {{ cls }}"></span> {% endmacro %}
 <div class="legend">
   <span class="legend-item muted"><strong>Bar</strong> = 막대(지속 구간) · <strong>Point</strong> = 점(순간 이벤트) · <strong>Plot</strong> = 연속 측정값 선그래프</span>
+  {% if legend_neutral %}
+    <span class="legend-item muted">색상 = 멤버(위 멤버 범례 참조)</span>
+  {% endif %}
   {% if device_type.key in ('motion_t1', 'motion_p1') %}
-    <span class="legend-item"><span class="swatch motion"></span> Bar — 재실 감지</span>
+    <span class="legend-item">{{ sw('motion') }}Bar — 재실 감지</span>
     {# lux plot 은 SmartThings hub 에서만. hub 미상(그룹 패널)이면 함께 표기. #}
     {% if _hub is none or _hub == 'smartthings' %}
-      <span class="legend-item"><span class="swatch lux-tick"></span> Plot — 조도 (lux, SmartThings hub)</span>
+      <span class="legend-item">{{ sw('lux-tick') }}Plot — 조도 (lux, SmartThings hub)</span>
     {% endif %}
   {% elif device_type.key == 'door_t1' %}
-    <span class="legend-item"><span class="swatch door"></span> Bar — 열림</span>
+    <span class="legend-item">{{ sw('door') }}Bar — 열림</span>
+  {% elif device_type.key == 'smart_plug_eu' %}
+    {# 화면에는 load_power 만 표시 (on/off·cost_energy 는 수집만, DISPLAY.md §4.9). #}
+    <span class="legend-item">{{ sw('power-tick') }}Plot — 순시 전력 load_power (W)</span>
+  {% elif device_type.key == 'water_leak_t1' %}
+    <span class="legend-item">{{ sw('leak') }}Bar — 누수 감지</span>
   {% elif device_type.key == 'vibration_t1' %}
-    <span class="legend-item"><span class="swatch vibration"></span> Bar — 움직임</span>
-    <span class="legend-item"><span class="swatch knock-tick"></span> Point — 두드림 (Aqara hub)</span>
+    <span class="legend-item">{{ sw('vibration') }}Bar — 움직임</span>
+    <span class="legend-item">{{ sw('knock-tick') }}Point — 두드림 (Aqara hub)</span>
   {% elif device_type.key == 'switch_t1' %}
-    <span class="legend-item"><span class="swatch switch-long"></span> Bar — 롱 프레스</span>
-    <span class="legend-item"><span class="swatch switch-event-tick"></span> Point — 클릭/흔들림</span>
+    <span class="legend-item">{{ sw('switch-long') }}Bar — 롱 프레스</span>
+    <span class="legend-item">{{ sw('switch-event-tick') }}Point — 클릭/흔들림</span>
   {% elif device_type.key == 'vibration_aq1' %}
-    <span class="legend-item"><span class="swatch vibration"></span> Bar — 움직임 (1·2·255)</span>
-    <span class="legend-item"><span class="swatch vibration-aq1-tick"></span> Point — 기타 이벤트 (두드림·낙하 등)</span>
+    <span class="legend-item">{{ sw('vibration') }}Bar — 움직임 (1·2·255)</span>
+    <span class="legend-item">{{ sw('vibration-aq1-tick') }}Point — 기타 이벤트 (두드림·낙하 등)</span>
   {% elif device_type.key in ('temp_humi_t1', 'temp_humi_wm') %}
-    <span class="legend-item"><span class="swatch temp-tick"></span> Plot — 온도 (°C, 좌측 축 실선)</span>
-    <span class="legend-item"><span class="swatch humi-tick"></span> Plot — 습도 (%RH, 우측 축 점선)</span>
+    {# 온습도 plot 은 개별·그룹·설치장소 모두 metric 색(온도=빨강/습도=파랑)으로 통일 → swatch 항상 표기. #}
+    <span class="legend-item">{{ swm('temp-tick') }}Plot — 온도 (°C, 좌측 축 실선)</span>
+    <span class="legend-item">{{ swm('humi-tick') }}Plot — 습도 (%RH, 우측 축 점선)</span>
   {% elif device_type.key in ('motion_and_light_p2', 'motion_and_light_wm') %}
-    <span class="legend-item"><span class="swatch motion"></span> Bar — 움직임 (active→inactive)</span>
-    <span class="legend-item"><span class="swatch lux-tick"></span> Plot — 조도 (lux, 우측 축 실선)</span>
+    <span class="legend-item">{{ sw('motion') }}Bar — 움직임 (active→inactive)</span>
+    <span class="legend-item">{{ sw('lux-tick') }}Plot — 조도 (lux, 우측 축 실선)</span>
   {% else %}
     <span class="legend-item muted">이 디바이스 종류의 시각화는 아직 지원되지 않습니다 (DISPLAY.md §4 후속).</span>
   {% endif %}

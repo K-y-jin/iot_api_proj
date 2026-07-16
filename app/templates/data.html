@@ -1,26 +1,58 @@
 {% extends "base.html" %}
 {% block title %}데이터 현황 · IoT{% endblock %}
 {% block content %}
+{# 데이터 현황 1행 렌더 매크로. 설치 장소별 그룹 접기/펼치기를 위해 행 마크업을 분리해 각 그룹에서 재사용.
+   매크로는 호출 컨텍스트를 자동 상속하지 않으므로 user/device_types 를 인자로 받는다. #}
+{% macro data_row(it, user, device_types) %}
+  {# 기본 접힘 상태 — 페이지 로드 시 모든 그룹이 접혀 있도록 숨김으로 렌더 (헤더 클릭 시 펼침). #}
+  <tr class="data-row" data-install-location="{{ it.install_location or '' }}" style="display:none;">
+    <td>{{ device_types[it.device_type].display_name_ko if it.device_type in device_types else it.device_type or "(deleted)" }}</td>
+    <td>{{ it.alias or "" }}</td>
+    <td>{{ it.install_location or "" }}</td>
+    {# device_id 클릭 시 디스플레이 탭으로 (DISPLAY.md §1, §8). 파일 목록은 보조 링크. #}
+    <td>
+      <a href="/display/{{ it.device_id }}"><code>{{ it.device_id }}</code></a>
+      <a href="/data/{{ it.device_id }}/{{ it.bundle_key }}" class="muted" title="파일 목록">파일</a>
+    </td>
+    <td><code>{{ it.bundle_key }}</code></td>
+    <td>{{ it.file_count }}</td>
+    <td title="{{ '{:,}'.format(it.total_bytes) }} B">{{ it.total_bytes | human_bytes }}</td>
+    <td>{{ it.first_date }}</td>
+    <td>{{ it.last_date }}</td>
+    <td>{{ "{:,}".format(it.total_records) }}</td>
+    <td>
+      {# CSV 다운로드는 로그인 필수 (DESIGN.md §6.3). 비로그인 시 폼을 숨기고 안내. #}
+      {% if user %}
+        <form class="inline" onsubmit="return bundleDownload(event, '{{ it.device_id }}', '{{ it.bundle_key }}')">
+          <input type="date" name="from" value="{{ it.first_date }}" required />
+          ~
+          <input type="date" name="to" value="{{ it.last_date }}" required />
+          <select name="format">
+            <option value="zip">zip</option>
+            <option value="concat">concat CSV</option>
+          </select>
+          <button type="submit">받기</button>
+        </form>
+      {% else %}
+        <a href="/login" class="muted">로그인 후 다운로드</a>
+      {% endif %}
+    </td>
+  </tr>
+{% endmacro %}
 <section class="card">
   <h1>데이터 수집 현황</h1>
   <p class="muted">device × bundle 단위 집계. 행 클릭 시 일자별 파일로 이동. (DESIGN.md §7.3)</p>
   {% if items %}
-    {# 설치 장소 필터 — items 의 install_location 고유값으로 드롭다운 자동 생성.
-       devices.html 과 동일 패턴. "(미지정)" 옵션은 빈 install_location 행을 표시. #}
+    {# 설치 장소별 그룹 접기/펼치기 — devices.html 과 동일 패턴. 기본 전체 접힘, 미지정은 마지막 그룹. #}
     {% set data_locations = items | map(attribute='install_location')
                                    | reject('none') | reject('equalto', '')
                                    | unique | list | sort %}
+    {% set data_unlocated = items | selectattr('install_location', 'in', [none, '']) | list %}
     <p>
-      <label>설치 장소
-        <select id="data-location-filter" onchange="filterDataByLocation(this.value)">
-          <option value="">(전체)</option>
-          {% for loc in data_locations %}
-            <option value="{{ loc }}">{{ loc }}</option>
-          {% endfor %}
-          <option value="__none__">(미지정)</option>
-        </select>
-      </label>
-      <span class="muted">표시: <span id="data-visible-count">{{ items|length }}</span> / {{ items|length }}</span>
+      <button type="button" onclick="setAllDataLocationGroups(true)">전체 펼치기</button>
+      <button type="button" onclick="setAllDataLocationGroups(false)">전체 접기</button>
+      <span class="muted" style="margin-left:0.5em;">설치 장소 헤더를 클릭해 접기/펼치기</span>
+      <span class="muted" style="margin-left:0.5em;">표시: <span id="data-visible-count">0</span> / {{ items|length }}</span>
     </p>
     <table>
       <thead>
@@ -33,41 +65,38 @@
         </tr>
       </thead>
       <tbody>
-        {% for it in items %}
-          <tr class="data-row" data-install-location="{{ it.install_location or '' }}">
-            <td>{{ device_types[it.device_type].display_name_ko if it.device_type in device_types else it.device_type or "(deleted)" }}</td>
-            <td>{{ it.alias or "" }}</td>
-            <td>{{ it.install_location or "" }}</td>
-            {# device_id 클릭 시 디스플레이 탭으로 (DISPLAY.md §1, §8). 파일 목록은 보조 링크. #}
-            <td>
-              <a href="/display/{{ it.device_id }}"><code>{{ it.device_id }}</code></a>
-              <a href="/data/{{ it.device_id }}/{{ it.bundle_key }}" class="muted" title="파일 목록">파일</a>
-            </td>
-            <td><code>{{ it.bundle_key }}</code></td>
-            <td>{{ it.file_count }}</td>
-            <td title="{{ '{:,}'.format(it.total_bytes) }} B">{{ it.total_bytes | human_bytes }}</td>
-            <td>{{ it.first_date }}</td>
-            <td>{{ it.last_date }}</td>
-            <td>{{ "{:,}".format(it.total_records) }}</td>
-            <td>
-              {# CSV 다운로드는 로그인 필수 (DESIGN.md §6.3). 비로그인 시 폼을 숨기고 안내. #}
-              {% if user %}
-                <form class="inline" onsubmit="return bundleDownload(event, '{{ it.device_id }}', '{{ it.bundle_key }}')">
-                  <input type="date" name="from" value="{{ it.first_date }}" required />
-                  ~
-                  <input type="date" name="to" value="{{ it.last_date }}" required />
-                  <select name="format">
-                    <option value="zip">zip</option>
-                    <option value="concat">concat CSV</option>
-                  </select>
-                  <button type="submit">받기</button>
-                </form>
-              {% else %}
-                <a href="/login" class="muted">로그인 후 다운로드</a>
-              {% endif %}
+        {# 장소별 그룹 헤더(기본 접힘) + 소속 데이터 행. colspan=11 (표 컬럼 수). #}
+        {% for loc in data_locations %}
+          {% set loc_items = items | selectattr('install_location', 'equalto', loc) | list %}
+          <tr class="loc-group-header collapsed" data-loc-group="{{ loc }}"
+              onclick="toggleDataLocationGroup(this.dataset.locGroup)">
+            <td colspan="11">
+              <span class="loc-caret">▼</span>
+              <b>{{ loc }}</b> <span class="muted">({{ loc_items|length }}건)</span>
+              {# 설치 장소가 동일한 디바이스를 한 화면에 모아보는 디스플레이 (DISPLAY.md §4.11).
+                 헤더 클릭(접기/펼치기)과 구분되도록 링크 클릭은 이벤트 전파를 막는다. #}
+              <a href="/display/location/{{ loc | urlencode }}" class="muted"
+                 style="margin-left:0.5em;" onclick="event.stopPropagation()">📊 설치 장소별 데이터 보기</a>
             </td>
           </tr>
+          {% for it in loc_items %}
+            {{ data_row(it, user, device_types) }}
+          {% endfor %}
         {% endfor %}
+        {% if data_unlocated %}
+          <tr class="loc-group-header collapsed" data-loc-group="__none__"
+              onclick="toggleDataLocationGroup(this.dataset.locGroup)">
+            <td colspan="11">
+              <span class="loc-caret">▼</span>
+              <b>(미지정)</b> <span class="muted">({{ data_unlocated|length }}건)</span>
+              <a href="/display/location/__none__" class="muted"
+                 style="margin-left:0.5em;" onclick="event.stopPropagation()">📊 설치 장소별 데이터 보기</a>
+            </td>
+          </tr>
+          {% for it in data_unlocated %}
+            {{ data_row(it, user, device_types) }}
+          {% endfor %}
+        {% endif %}
       </tbody>
     </table>
   {% else %}

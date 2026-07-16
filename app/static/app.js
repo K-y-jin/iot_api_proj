@@ -29,6 +29,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.querySelectorAll(".device-edit-form").forEach((form) => {
     const typeSel = form.querySelector("select[name=device_type]");
     if (typeSel) onEditTypeChange(typeSel);
+    syncEnabledLock(form);
     const editIdInput = form.querySelector("input[name=device_id_input]");
     if (editIdInput) {
       editIdInput.addEventListener("input", () => {
@@ -37,6 +38,11 @@ document.addEventListener("DOMContentLoaded", () => {
       });
     }
   });
+
+  // 설치 장소 그룹 펼침 상태 복원 — 최초 진입은 저장값이 없어 기본 접힘 유지, 내부 조작 리로드 시 펼침 복원.
+  // 페이지별로 해당 토글 함수를 넘겨준다 (장치: device-row, 데이터 현황: data-row).
+  if (document.getElementById("active-visible-count")) restoreLocGroupState(toggleLocationGroup);
+  if (document.getElementById("data-visible-count")) restoreLocGroupState(toggleDataLocationGroup);
 });
 
 // SmartThings 토큰 무효/미등록 알림이 active 면 admin 에게 confirm 팝업 — DESIGN.md §15.2 .
@@ -261,6 +267,21 @@ async function toggleDevice(id, enable) {
   location.reload();
 }
 
+// 수동 수집 대상(manual_enabled) 단건 토글 — 자동 수집(enabled) 과 독립 (DESIGN.md §5).
+// 체크박스 onchange 로 호출. 실패 시 서버 진실 값으로 되돌리기 위해 리로드.
+async function toggleManualDevice(id, checked) {
+  const r = await fetch(`/api/devices/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ manual_enabled: checked }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    alert("수동 수집 대상 변경 실패: " + (err.detail || r.status));
+  }
+  location.reload();
+}
+
 // 설치 장소 드롭다운 필터 — 활성 장치 목록 (devices.html).
 //   value === ""        : 전체 표시
 //   value === "__none__": install_location 이 빈 행만
@@ -268,32 +289,109 @@ async function toggleDevice(id, enable) {
 // 편집 폼 행(.device-edit-row)도 같은 install_location 을 가지므로 함께 토글.
 // 단, 편집 폼은 사용자가 명시적으로 "편집" 버튼을 눌러야 보이므로 필터에 매치되더라도
 // 기본 display=none 을 유지하기 위해 매치 안 될 때만 강제로 숨김 처리.
-function filterDevicesByLocation(value) {
+// 설치 장소 그룹 접기/펼치기 (devices.html). 드롭다운 필터를 대체.
+//   loc: 그룹 install_location 값. "__none__" 은 설치 장소 미지정(빈 값) 그룹.
+// 헤더의 collapsed 클래스로 상태를 표현하고, 소속 device-row(+편집 폼 행)의 display 를 토글한다.
+// 접을 때는 열려 있던 편집 폼도 함께 숨기고, 펼칠 때는 편집 폼을 자동으로 다시 열지 않는다.
+function toggleLocationGroup(loc, forceExpand) {
+  const header = document.querySelector(`tr.loc-group-header[data-loc-group="${cssEscape(loc)}"]`);
+  if (!header) return;
+  const collapse = (forceExpand === undefined) ? !header.classList.contains("collapsed") : !forceExpand;
+  header.classList.toggle("collapsed", collapse);
+  const rowLoc = (loc === "__none__") ? "" : loc;
+  // 설치 장소별 일괄 토글 버튼 행 — 헤더와 함께 접기/펼치기 (펼침 시 그룹 첫 줄로 노출).
+  document.querySelectorAll("tr.loc-bulk-row").forEach((tr) => {
+    if ((tr.dataset.installLocation || "") !== rowLoc) return;
+    tr.style.display = collapse ? "none" : "";
+  });
+  document.querySelectorAll("tr.device-row").forEach((tr) => {
+    if ((tr.dataset.installLocation || "") !== rowLoc) return;
+    tr.style.display = collapse ? "none" : "";
+    const editTr = document.getElementById(tr.id.replace("device-row-", "device-edit-"));
+    if (editTr && collapse) editTr.style.display = "none";
+  });
+  updateActiveVisibleCount();
+  persistLocGroupState();
+}
+
+// 전체 펼치기/접기 버튼.
+function setAllLocationGroups(expand) {
+  document.querySelectorAll("tr.loc-group-header").forEach((h) => {
+    toggleLocationGroup(h.dataset.locGroup, expand);
+  });
+}
+
+// 현재 화면에 보이는 활성 장치 행 수를 헤더 카운터에 반영 (접힌 그룹 제외).
+function updateActiveVisibleCount() {
   let visible = 0;
   document.querySelectorAll("tr.device-row").forEach((tr) => {
-    const loc = tr.dataset.installLocation || "";
-    const match = (value === "")
-      || (value === "__none__" ? loc === "" : loc === value);
-    tr.style.display = match ? "" : "none";
-    // 편집 폼 행은 부모 매치에 따라 강제 숨김 (펼친 상태에서 필터가 바뀌면 같이 사라짐).
-    const editId = tr.id.replace("device-row-", "device-edit-");
-    const editTr = document.getElementById(editId);
-    if (editTr && !match) editTr.style.display = "none";
-    if (match) visible++;
+    if (tr.style.display !== "none") visible++;
   });
   const counter = document.getElementById("active-visible-count");
   if (counter) counter.textContent = String(visible);
 }
 
-// 설치 장소 드롭다운 필터 — 데이터 현황 (data.html). devices 와 동일 로직.
-function filterDataByLocation(value) {
+// CSS.escape 폴백 — 설치 장소 문자열에 특수문자가 있어도 안전하게 속성 선택자에 쓰기 위함.
+function cssEscape(s) {
+  if (window.CSS && CSS.escape) return CSS.escape(s);
+  return String(s).replace(/["\\\]]/g, "\\$&");
+}
+
+// 설치 장소 그룹 펼침 상태 유지 (장치·데이터 현황 공용).
+// 정책: 페이지 최초 진입 시에는 기본 접힘(마크업 그대로). 내부 버튼 조작으로 리로드돼도 펼침 상태를
+// 잃지 않도록, 현재 펼쳐진 그룹 목록을 sessionStorage 에 페이지 경로별로 기록/복원한다.
+// sessionStorage 이므로 탭을 닫으면 초기화되어 "처음 진입 = 접힘" 이 다시 성립한다.
+function locGroupStateKey() {
+  return "locGroups:" + location.pathname;
+}
+
+function persistLocGroupState() {
+  const expanded = [];
+  document.querySelectorAll("tr.loc-group-header").forEach((h) => {
+    if (!h.classList.contains("collapsed")) expanded.push(h.dataset.locGroup);
+  });
+  try { sessionStorage.setItem(locGroupStateKey(), JSON.stringify(expanded)); } catch (e) { /* 사생활 모드 등 무시 */ }
+}
+
+// 저장된 펼침 상태를 복원. 저장값이 없으면(최초 진입) 아무것도 하지 않아 기본 접힘 유지.
+// toggleFn 은 페이지에 맞는 토글 함수(toggleLocationGroup | toggleDataLocationGroup).
+function restoreLocGroupState(toggleFn) {
+  let raw = null;
+  try { raw = sessionStorage.getItem(locGroupStateKey()); } catch (e) { return; }
+  if (!raw) return;
+  let expanded;
+  try { expanded = JSON.parse(raw); } catch (e) { return; }
+  (expanded || []).forEach((loc) => toggleFn(loc, true));
+}
+
+// 설치 장소 그룹 접기/펼치기 — 데이터 현황 (data.html). devices 와 동일 패턴이나 편집 폼 행이 없어 단순.
+//   loc: 그룹 install_location 값. "__none__" 은 미지정(빈 값) 그룹.
+function toggleDataLocationGroup(loc, forceExpand) {
+  const header = document.querySelector(`tr.loc-group-header[data-loc-group="${cssEscape(loc)}"]`);
+  if (!header) return;
+  const collapse = (forceExpand === undefined) ? !header.classList.contains("collapsed") : !forceExpand;
+  header.classList.toggle("collapsed", collapse);
+  const rowLoc = (loc === "__none__") ? "" : loc;
+  document.querySelectorAll("tr.data-row").forEach((tr) => {
+    if ((tr.dataset.installLocation || "") !== rowLoc) return;
+    tr.style.display = collapse ? "none" : "";
+  });
+  updateDataVisibleCount();
+  persistLocGroupState();
+}
+
+// 데이터 현황 전체 펼치기/접기 버튼.
+function setAllDataLocationGroups(expand) {
+  document.querySelectorAll("tr.loc-group-header").forEach((h) => {
+    toggleDataLocationGroup(h.dataset.locGroup, expand);
+  });
+}
+
+// 현재 화면에 보이는 데이터 행 수를 카운터에 반영 (접힌 그룹 제외).
+function updateDataVisibleCount() {
   let visible = 0;
   document.querySelectorAll("tr.data-row").forEach((tr) => {
-    const loc = tr.dataset.installLocation || "";
-    const match = (value === "")
-      || (value === "__none__" ? loc === "" : loc === value);
-    tr.style.display = match ? "" : "none";
-    if (match) visible++;
+    if (tr.style.display !== "none") visible++;
   });
   const counter = document.getElementById("data-visible-count");
   if (counter) counter.textContent = String(visible);
@@ -318,6 +416,79 @@ async function bulkToggleDevices(enable) {
   }
   const body = await r.json();
   if (status) status.textContent = `완료 (${body.changed}/${body.total} 변경)`;
+  location.reload();
+}
+
+// 활성 디바이스 전체의 manual_enabled(수동 수집 대상) 를 일괄 선택/해제 (DESIGN.md §5, §7.4).
+// 자동 수집(enabled) 일괄 토글과 별개 엔드포인트(bulk_manual_enable) 사용.
+async function bulkToggleManual(enable) {
+  const label = enable ? "전체 선택" : "전체 해제";
+  if (!confirm(`활성 장치 전체를 수동 수집 대상 ${label} 하시겠습니까?`)) return;
+  const status = document.getElementById("bulk-manual-toggle-status");
+  if (status) { status.textContent = "적용 중..."; status.className = "muted"; }
+  const r = await fetch("/api/devices/bulk_manual_enable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: enable }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    if (status) { status.textContent = "실패: " + (err.detail || r.status); status.className = "error"; }
+    return;
+  }
+  const body = await r.json();
+  if (status) status.textContent = `완료 (${body.changed}/${body.total} 변경)`;
+  location.reload();
+}
+
+// 설치 장소 그룹 헤더의 일괄 토글 — 해당 장소의 활성 장치만 enabled/manual_enabled 를 변경
+// (DESIGN.md §7.4). 전체 일괄 토글(bulkToggleDevices/bulkToggleManual)과 동일 엔드포인트를
+// 쓰되 payload.location 으로 범위를 한정한다. btn 은 클릭된 버튼 — 소속 그룹 헤더의
+// data-loc-group 에서 설치 장소 값을 읽어(따옴표 등 이스케이프 회피) 사용한다.
+// "__none__" 은 설치 장소 미지정 그룹.
+function _locOfButton(btn) {
+  // 토글 버튼은 그룹 펼침 시 노출되는 loc-bulk-row 안에 있다. 그 행의 data-loc-group 이 설치 장소 값.
+  const row = btn.closest("tr[data-loc-group]");
+  return row ? row.dataset.locGroup : null;
+}
+
+function _locLabel(loc) {
+  return loc === "__none__" ? "(미지정)" : loc;
+}
+
+async function bulkToggleDevicesLocation(btn, enable) {
+  const loc = _locOfButton(btn);
+  if (loc === null) return;
+  const label = enable ? "전체 ON" : "전체 OFF";
+  if (!confirm(`설치 장소 "${_locLabel(loc)}" 의 장치 자동 수집을 ${label} 으로 변경하시겠습니까?`)) return;
+  const r = await fetch("/api/devices/bulk_enable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: enable, location: loc }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    alert("변경 실패: " + (err.detail || r.status));
+    return;
+  }
+  location.reload();
+}
+
+async function bulkToggleManualLocation(btn, enable) {
+  const loc = _locOfButton(btn);
+  if (loc === null) return;
+  const label = enable ? "전체 선택" : "전체 해제";
+  if (!confirm(`설치 장소 "${_locLabel(loc)}" 의 장치 수동 수집 대상을 ${label} 하시겠습니까?`)) return;
+  const r = await fetch("/api/devices/bulk_manual_enable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled: enable, location: loc }),
+  });
+  if (!r.ok) {
+    const err = await r.json().catch(() => ({}));
+    alert("변경 실패: " + (err.detail || r.status));
+    return;
+  }
   location.reload();
 }
 
@@ -355,6 +526,26 @@ function onEditTypeChange(typeSel) {
   // 현재 hub 가 새 device_type 에서 지원되지 않으면 첫 옵션이 자동 선택됨.
   const idInput = form.querySelector("input[name=device_id_input]");
   if (idInput) applyDeviceIdCase(idInput, hubSel.value);
+  // device_type 변경으로 hub 가 바뀌었을 수 있으니 자동 수집 잠금 상태 재동기화.
+  syncEnabledLock(form);
+}
+
+// SmartThings 허브는 자동 수집 미지원(DESIGN.md §5) → 편집 폼의 '자동 수집' 선택을 OFF 로
+// 고정·비활성화한다. hub 를 다시 aqara 로 바꾸면 잠금 해제. 서버도 동일 규칙을 강제한다.
+function syncEnabledLock(form) {
+  if (!form) return;
+  const hubSel = form.querySelector("select[name=hub]");
+  const enabledSel = form.querySelector("select[name=enabled]");
+  const note = form.querySelector(".st-lock-note");
+  if (!hubSel || !enabledSel) return;
+  const isST = hubSel.value === "smartthings";
+  if (isST) {
+    enabledSel.value = "0";
+    enabledSel.disabled = true;
+  } else {
+    enabledSel.disabled = false;
+  }
+  if (note) note.classList.toggle("hidden", !isST);
 }
 
 // 편집 폼 제출: 변경된 필드만 PATCH 본문에 포함 (불필요한 이력 트리거 회피).
@@ -377,6 +568,7 @@ async function submitDeviceEdit(ev, id) {
   payload.install_location = fd.get("install_location") || null;
   payload.install_date = fd.get("install_date") || null;
   payload.enabled = fd.get("enabled") === "1";
+  payload.manual_enabled = fd.get("manual_enabled") === "1";
   // group_id: "" → null (해제)
   const g = fd.get("group_id");
   payload.group_id = (g === "" || g === null) ? null : Number(g);

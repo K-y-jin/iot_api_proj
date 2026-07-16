@@ -31,10 +31,21 @@
 
   {# 일자별 행 #}
   {% for day in day_rows %}
-    {% set track = day.tracks[0] %}
     <div class="day-row {% if day.is_today %}today{% endif %}">
+    {# 한 디바이스가 여러 트랙을 가지면 (예: smart_plug_eu 의 on/off 막대 + 전력 plot, DISPLAY.md §4.9)
+       그리드 3열(라벨·트랙·메타)이 트랙마다 한 행씩 auto-flow 된다. 일자 라벨은 첫 트랙에만 렌더해
+       나머지 행의 라벨 칸은 빈 스페이서로 두어 트랙 열 정렬을 유지한다. #}
+    {% for track in day.tracks %}
+      {# 그룹 패널은 track.members(멤버별 색·이벤트)를 채워 멤버 색 오버레이 모드로 렌더 (DISPLAY.md §4.8).
+         단일 디바이스 화면은 members 가 없어 기존 단일 색 경로를 탄다. #}
+      {% set is_group = (track.members is defined and track.members) %}
       <div class="day-label-col">
-        <div class="day-date">{{ day.date[5:] }} <span class="weekday">({{ day.weekday_ko }})</span></div>
+        {% if loop.first %}
+        {# 주말 일자 레이블 색 (DISPLAY.md §6, 달력 관례): 일요일=빨강, 토요일=파랑. 외부 CSS 캐시에
+           의존하지 않도록 인라인 리터럴 색을 직접 박는다 — 멤버 색·관측 마커와 동일 사유(§6). 날짜·요일 모두 적용. #}
+        {% set _wd_color = '#dc2626' if day.weekday_ko == '일' else ('#2563eb' if day.weekday_ko == '토' else '') %}
+        <div class="day-date"{% if _wd_color %} style="color:{{ _wd_color }}"{% endif %}>{{ day.date[5:] }} <span class="weekday"{% if _wd_color %} style="color:{{ _wd_color }}"{% endif %}>({{ day.weekday_ko }})</span></div>
+        {% endif %}
       </div>
       <div class="track-col">
         <svg viewBox="0 0 {{ TRACK_W }} {{ TRACK_H }}" preserveAspectRatio="none" class="track">
@@ -46,6 +57,8 @@
 
           {% set bar_var = ('var(--motion-color)' if track.kind == 'motion'
                             else 'var(--door-open-color)' if track.kind == 'door'
+                            else 'var(--plug-on-color)' if track.kind == 'plug'
+                            else 'var(--leak-color)' if track.kind == 'leak'
                             else 'var(--vibration-color)' if track.kind == 'vibration'
                             else 'var(--switch-long-color)' if track.kind == 'switch'
                             else 'var(--motion-color)' if track.kind == 'st_motion'
@@ -57,6 +70,108 @@
                              else 'var(--lux-tick-color)' if track.kind == 'st_motion'
                              else '#9ca3af') %}
 
+          {% if is_group %}
+          {# ───────── 그룹 멤버 색 오버레이 (DISPLAY.md §4.8) ─────────
+             union 대신 멤버별 고유 색으로 한 트랙에 겹쳐 그린다. 막대는 반투명(겹침 식별),
+             tick·polyline 은 멤버 색. plot 의 Y 범위는 멤버 전체 공유 범위로 정규화. #}
+          {% set y_top = 4 %}
+          {% set y_bot = TRACK_H - 4 %}
+          {% set y_h = y_bot - y_top %}
+          {# 1) interval 막대 — 멤버 색 + fill-opacity 로 동시 활동 식별 #}
+          {% for m in track.members %}
+            {% for iv in m.intervals %}
+              {% set sx = (display_seconds(iv.start) * TRACK_W) // SEC %}
+              {% set ex = (display_seconds(iv.end) * TRACK_W) // SEC %}
+              {% set w = (ex - sx) if (ex - sx) > 0 else 1 %}
+              <rect x="{{ sx }}" y="4" width="{{ w }}" height="{{ TRACK_H - 8 }}" fill="{{ m.color }}" fill-opacity="0.55" rx="2">
+                <title>{{ m.label }} · {{ iv.start[11:] }} – {{ iv.end[11:] }}{% if iv.truncated_left %} ← 전날 이어짐{% endif %}{% if iv.truncated_right %} → 다음날 이어짐{% endif %}</title>
+              </rect>
+            {% endfor %}
+          {% endfor %}
+          {# 2) point tick — 멤버 색 (그룹은 코드별 색보다 "어느 센서" 식별 우선, 라벨은 툴팁 유지) #}
+          {% for m in track.members %}
+            {% for p in m.points %}
+              {% set kx = (display_seconds(p.at) * TRACK_W) // SEC %}
+              <line x1="{{ kx }}" y1="0" x2="{{ kx }}" y2="8" stroke="{{ m.color }}" stroke-width="2">
+                <title>{{ m.label }} · {{ p.label or '이벤트' }} {{ p.at[11:] }}</title>
+              </line>
+            {% endfor %}
+          {% endfor %}
+          {# 3) lux plot — 멤버별 polyline, 공유 Y 범위(멤버 전체 min~max)로 정규화 #}
+          {% if track.kind == 'st_motion' and track.lux_series %}
+            {% set lx = track.lux_series %}
+            {% set lux_span = (lx.lux_max - lx.lux_min) or 1 %}
+            {% for m in track.members %}{% if m.lux %}
+              <polyline fill="none" stroke="{{ m.color }}" stroke-width="1.5" points="{% for at, v in m.lux %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - lx.lux_min) / lux_span) * 10)|round|int / 10 }} {% endfor %}">
+                <title>{{ m.label }} · 조도 lux ({{ '%.0f'|format(lx.lux_min) }}~{{ '%.0f'|format(lx.lux_max) }}, 샘플 {{ m.lux|length }}개)</title>
+              </polyline>
+              {% for at, v in m.lux %}
+                <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - lx.lux_min) / lux_span) * 10)|round|int / 10 }}" r="1.8" fill="{{ m.color }}">
+                  <title>{{ m.label }} · {{ at[11:] }} · {{ '%.0f'|format(v) }}lx</title>
+                </circle>
+              {% endfor %}
+            {% endif %}{% endfor %}
+            {% if lx.lux %}
+              <text x="{{ TRACK_W - 2 }}" y="9" font-size="9" fill="#475569" text-anchor="end">{{ '%.0f'|format(lx.lux_max) }}lx</text>
+              <text x="{{ TRACK_W - 2 }}" y="{{ TRACK_H - 2 }}" font-size="9" fill="#475569" text-anchor="end">{{ '%.0f'|format(lx.lux_min) }}lx</text>
+            {% endif %}
+          {# 4) 온습도 plot — 개별 보기와 색상 통일: 온도=빨강(--temp-tick-color) 실선, 습도=파랑(--humi-tick-color)
+             점선 (멤버 색 대신 metric 색, 사용자 요구). 멤버 구분은 툴팁 라벨로만 유지. 공유 Y 범위. #}
+          {% elif track.kind == 'temp_humi_plot' and track.series %}
+            {% set s = track.series %}
+            {% set t_span = (s.temp_max - s.temp_min) or 1 %}
+            {% set h_span = (s.humi_max - s.humi_min) or 1 %}
+            {% for m in track.members %}
+              {% if m.temperature %}
+                <polyline fill="none" stroke="var(--temp-tick-color)" stroke-width="1.5" points="{% for at, v in m.temperature %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - s.temp_min) / t_span) * 10)|round|int / 10 }} {% endfor %}">
+                  <title>{{ m.label }} · 온도 ({{ '%.1f'|format(s.temp_min) }}~{{ '%.1f'|format(s.temp_max) }}°C, 샘플 {{ m.temperature|length }}개)</title>
+                </polyline>
+                {% for at, v in m.temperature %}
+                  <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - s.temp_min) / t_span) * 10)|round|int / 10 }}" r="1.8" fill="#f97316">
+                    <title>{{ m.label }} · {{ at[11:] }} · {{ '%.1f'|format(v) }}°C</title>
+                  </circle>
+                {% endfor %}
+              {% endif %}
+              {% if m.humidity %}
+                <polyline fill="none" stroke="var(--humi-tick-color)" stroke-width="1.5" stroke-dasharray="4,2" points="{% for at, v in m.humidity %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - s.humi_min) / h_span) * 10)|round|int / 10 }} {% endfor %}">
+                  <title>{{ m.label }} · 습도 ({{ '%.1f'|format(s.humi_min) }}~{{ '%.1f'|format(s.humi_max) }}%RH, 샘플 {{ m.humidity|length }}개)</title>
+                </polyline>
+                {% for at, v in m.humidity %}
+                  <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - s.humi_min) / h_span) * 10)|round|int / 10 }}" r="1.8" fill="#38bdf8">
+                    <title>{{ m.label }} · {{ at[11:] }} · {{ '%.1f'|format(v) }}%RH</title>
+                  </circle>
+                {% endfor %}
+              {% endif %}
+            {% endfor %}
+            {# 축 라벨 — 선은 멤버 색이지만 좌=온도(실선)·우=습도(점선) 범위는 metric 색으로 표기 #}
+            {% if s.temperature %}
+              <text x="2" y="9" font-size="9" fill="var(--temp-tick-color)" text-anchor="start">{{ '%.1f'|format(s.temp_max) }}°</text>
+              <text x="2" y="{{ TRACK_H - 2 }}" font-size="9" fill="var(--temp-tick-color)" text-anchor="start">{{ '%.1f'|format(s.temp_min) }}°</text>
+            {% endif %}
+            {% if s.humidity %}
+              <text x="{{ TRACK_W - 2 }}" y="9" font-size="9" fill="var(--humi-tick-color)" text-anchor="end">{{ '%.0f'|format(s.humi_max) }}%</text>
+              <text x="{{ TRACK_W - 2 }}" y="{{ TRACK_H - 2 }}" font-size="9" fill="var(--humi-tick-color)" text-anchor="end">{{ '%.0f'|format(s.humi_min) }}%</text>
+            {% endif %}
+          {# 5) 전력 plot — 멤버 색 load_power polyline, 공유 Y 범위(하한 0). DISPLAY.md §4.9 #}
+          {% elif track.kind == 'plug_power' and track.series %}
+            {% set s = track.series %}
+            {% set p_span = (s.power_max - s.power_min) or 1 %}
+            {% for m in track.members %}{% if m.power %}
+              <polyline fill="none" stroke="{{ m.color }}" stroke-width="1.5" points="{% for at, v in m.power %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - s.power_min) / p_span) * 10)|round|int / 10 }} {% endfor %}">
+                <title>{{ m.label }} · 순시 전력 ({{ '%.0f'|format(s.power_min) }}~{{ '%.0f'|format(s.power_max) }}W, 샘플 {{ m.power|length }}개)</title>
+              </polyline>
+              {% for at, v in m.power %}
+                <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - s.power_min) / p_span) * 10)|round|int / 10 }}" r="1.8" fill="{{ m.color }}">
+                  <title>{{ m.label }} · {{ at[11:] }} · {{ '%.1f'|format(v) }}W</title>
+                </circle>
+              {% endfor %}
+            {% endif %}{% endfor %}
+            {% if s.power %}
+              <text x="2" y="9" font-size="9" fill="#475569" text-anchor="start">{{ '%.0f'|format(s.power_max) }}W</text>
+              <text x="2" y="{{ TRACK_H - 2 }}" font-size="9" fill="#475569" text-anchor="start">{{ '%.0f'|format(s.power_min) }}W</text>
+            {% endif %}
+          {% endif %}
+          {% else %}
           {# 온습도 plot — 점/막대 대신 두 polyline (이중축 자동 Y 범위). DISPLAY.md §4.6 #}
           {% if track.kind == 'temp_humi_plot' and track.series %}
             {% set s = track.series %}
@@ -140,11 +255,42 @@
             <text x="{{ TRACK_W - 2 }}" y="9" font-size="9" fill="#475569" text-anchor="end">{{ '%.0f'|format(lx.lux_max) }}lx</text>
             <text x="{{ TRACK_W - 2 }}" y="{{ TRACK_H - 2 }}" font-size="9" fill="#475569" text-anchor="end">{{ '%.0f'|format(lx.lux_min) }}lx</text>
           {% endif %}
+
+          {# 전력 line plot — load_power(순시 전력, W) 단일 시계열만 표시 (DISPLAY.md §4.9, 사용자 정책).
+             on/off 막대·cost_energy 는 수집만 하고 화면에는 그리지 않는다.
+             ⚠️ 선·라벨·마커 색은 CSS 변수가 아니라 리터럴 hex — 캐시된 구버전 style.css 에서 var() stroke 가
+             none 으로 계산되면 선이 안 그려지는 것을 피하기 위함 (DISPLAY.md §6). #}
+          {% if track.kind == 'plug_power' and track.series and track.series.power %}
+            {% set s = track.series %}
+            {% set y_top = 4 %}
+            {% set y_bot = TRACK_H - 4 %}
+            {% set y_h = y_bot - y_top %}
+            {% set p_span = (s.power_max - s.power_min) or 1 %}
+            <polyline fill="none" stroke="#d97706" stroke-width="1.5" points="{% for at, v in s.power %}{{ (display_seconds(at) * TRACK_W) // SEC }},{{ ((y_bot - y_h * (v - s.power_min) / p_span) * 10)|round|int / 10 }} {% endfor %}">
+              <title>순시 전력 ({{ '%.0f'|format(s.power_min) }}~{{ '%.0f'|format(s.power_max) }}W, 샘플 {{ s.power|length }}개)</title>
+            </polyline>
+            {% for at, v in s.power %}
+              <circle cx="{{ (display_seconds(at) * TRACK_W) // SEC }}" cy="{{ ((y_bot - y_h * (v - s.power_min) / p_span) * 10)|round|int / 10 }}" r="1.8" fill="#f97316">
+                <title>{{ at[11:] }} · {{ '%.1f'|format(v) }}W</title>
+              </circle>
+            {% endfor %}
+            <text x="2" y="9" font-size="9" fill="#d97706" text-anchor="start">{{ '%.0f'|format(s.power_max) }}W</text>
+            <text x="2" y="{{ TRACK_H - 2 }}" font-size="9" fill="#d97706" text-anchor="start">{{ '%.0f'|format(s.power_min) }}W</text>
+          {% endif %}
+          {% endif %}{# is_group #}
         </svg>
       </div>
       <div class="day-meta">
         {% if not track.has_csv %}
           <span class="meta-tag muted">수집 없음</span>
+        {% elif track.kind == 'plug_power' %}
+          {# 전력(load_power) plot 샘플 수만 표시. series 부재/0건은 측정 없음. #}
+          {% set pw_n = (track.series.power|length) if track.series else 0 %}
+          {% if pw_n == 0 %}
+            <span class="meta-tag muted">측정 없음</span>
+          {% else %}
+            <span class="meta-tag">P {{ pw_n }}</span>
+          {% endif %}
         {% elif track.kind == 'temp_humi_plot' %}
           {# series 키는 단일 디바이스 화면에서만 채워짐. 그룹 합산 트랙은 series 가 없으므로
              안전하게 빈 시계열로 폴백 (그룹 합산은 plot 의미가 모호해 측정 없음 처리). #}
@@ -175,6 +321,7 @@
           <a class="meta-tag failed" href="/jobs">수집 실패</a>
         {% endif %}
       </div>
+    {% endfor %}{# track loop #}
     </div>
   {% endfor %}
 

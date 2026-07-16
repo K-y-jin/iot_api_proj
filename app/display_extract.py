@@ -251,6 +251,147 @@ def extract_door_intervals(
     return intervals
 
 
+# ─────────────────────────── water leak (leak_status) ───────────────────────────
+
+def extract_leak_intervals(
+    rows_today: Iterable[dict[str, str]],
+    rows_prev_day: Optional[Iterable[dict[str, str]]] = None,
+    target_date: str = "",
+) -> list[Interval]:
+    """leak_status 이벤트로 '누수 지속 영역' 추출 (DISPLAY.md §4.10).
+
+    door_t1 (§4.2) 과 완전히 동일한 이진 상태머신 — 값 토큰만 다르다 (DEVICE.md §12):
+    - 1=누수 시작, 0=정상 복귀(종료)
+    - 직전 일자 CSV 마지막 값이 1(누수)이고 0(정상)이 없으면 target_date 0:00부터 누수 상태로 시작
+    - 종료 미해지(누수 상태로 일자 종료): target_date 23:59:59로 막대 연장 + truncated_right
+    """
+    target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    day_start = datetime.combine(target, time(0, 0, 0))
+    day_end = datetime.combine(target, time(23, 59, 59))
+
+    # 1) 초기 상태 결정: 직전 일자 마지막 이벤트가 1(누수)이면 leak=True로 시작
+    initial_leak = False
+    if rows_prev_day is not None:
+        last_val = _last_value(rows_prev_day, value_key="leak_status")
+        if last_val == "1":
+            initial_leak = True
+
+    intervals: list[Interval] = []
+    leak_since: Optional[datetime] = day_start if initial_leak else None
+    leak_truncated_left = initial_leak
+
+    for t, v in _sorted_time_value(rows_today, value_key="leak_status"):
+        if v == "1":
+            if leak_since is None:
+                leak_since = t
+                leak_truncated_left = False
+        elif v == "0":
+            if leak_since is not None:
+                intervals.append(Interval(
+                    start=leak_since.strftime("%Y-%m-%d %H:%M:%S"),
+                    end=t.strftime("%Y-%m-%d %H:%M:%S"),
+                    truncated_left=leak_truncated_left,
+                ))
+                leak_since = None
+                leak_truncated_left = False
+
+    # 2) 일자 종료까지 정상 복귀가 없는 막대 → 24:00으로 연장
+    if leak_since is not None:
+        intervals.append(Interval(
+            start=leak_since.strftime("%Y-%m-%d %H:%M:%S"),
+            end=day_end.strftime("%Y-%m-%d %H:%M:%S"),
+            truncated_left=leak_truncated_left,
+            truncated_right=True,
+        ))
+    return intervals
+
+
+# ─────────────────────────── smart plug (plug_status) ───────────────────────────
+
+def extract_plug_intervals(
+    rows_today: Iterable[dict[str, str]],
+    rows_prev_day: Optional[Iterable[dict[str, str]]] = None,
+    target_date: str = "",
+) -> list[Interval]:
+    """plug_status 이벤트로 '켜짐 영역' 추출 (DISPLAY.md §4.9).
+
+    door_t1 (§4.2) 과 동일한 이진 상태머신이되 aqara 스마트 플러그는 toggle 값이 추가된다:
+    - 1=Open(켜짐) 시작, 0=Close(꺼짐) 종료 (DEVICE.md §11.2)
+    - 2=Toggle 는 직전 상태를 반전 (켜짐이면 그 시점에 종료, 꺼짐이면 그 시점부터 시작)
+    - 직전 일자 CSV 마지막 값이 1(켜짐)이고 0/2 로 꺼지지 않았으면 target_date 0:00 부터 켜짐으로 시작
+    - 종료 미해지(켜진 채 일자 종료): target_date 23:59:59 로 막대 연장 + truncated_right
+    - 직전 일자 마지막 값이 2(Toggle) 면 절대 상태 불명 → carry-over 하지 않음 (꺼짐 가정, DEVICE.md §11.4)
+    """
+    target = datetime.strptime(target_date, "%Y-%m-%d").date()
+    day_start = datetime.combine(target, time(0, 0, 0))
+    day_end = datetime.combine(target, time(23, 59, 59))
+
+    # 1) 초기 상태 결정: 직전 일자 마지막 이벤트가 1(켜짐)이면 on=True 로 시작.
+    #    toggle(2) 로 끝났으면 절대 상태를 알 수 없어 꺼짐으로 가정 (carry-over 안 함).
+    initial_on = False
+    if rows_prev_day is not None:
+        last_val = _last_value(rows_prev_day, value_key="plug_status")
+        if last_val == "1":
+            initial_on = True
+
+    intervals: list[Interval] = []
+    on_since: Optional[datetime] = day_start if initial_on else None
+    on_truncated_left = initial_on
+
+    def _close(end_dt: datetime) -> None:
+        """현재 켜짐 구간을 end_dt 에서 종료해 interval 로 확정."""
+        nonlocal on_since, on_truncated_left
+        intervals.append(Interval(
+            start=on_since.strftime("%Y-%m-%d %H:%M:%S"),
+            end=end_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            truncated_left=on_truncated_left,
+        ))
+        on_since = None
+        on_truncated_left = False
+
+    for t, v in _sorted_time_value(rows_today, value_key="plug_status"):
+        if v == "1":
+            if on_since is None:
+                on_since = t
+                on_truncated_left = False
+        elif v == "0":
+            if on_since is not None:
+                _close(t)
+        elif v == "2":
+            # 토글: 켜짐↔꺼짐 반전.
+            if on_since is not None:
+                _close(t)
+            else:
+                on_since = t
+                on_truncated_left = False
+
+    # 2) 일자 종료까지 꺼지지 않은 막대 → 24:00 으로 연장.
+    if on_since is not None:
+        intervals.append(Interval(
+            start=on_since.strftime("%Y-%m-%d %H:%M:%S"),
+            end=day_end.strftime("%Y-%m-%d %H:%M:%S"),
+            truncated_left=on_truncated_left,
+            truncated_right=True,
+        ))
+    return intervals
+
+
+def extract_st_switch_intervals(
+    rows_today: Iterable[dict[str, str]],
+    rows_prev_day: Optional[Iterable[dict[str, str]]] = None,
+    target_date: str = "",
+) -> list[Interval]:
+    """SmartThings switch capability ('on'/'off') 로 켜짐 영역 추출 (DISPLAY.md §4.9 SmartThings 분기).
+
+    Aqara plug_status 1/0 페어와 의미 동일 (on↔1, off↔0). 컬럼명은 'switch'.
+    SmartThings 에는 toggle 값이 없어 door 의 contact 와 완전히 같은 페어 패턴이다.
+    """
+    return _extract_st_paired_intervals(
+        rows_today, rows_prev_day, target_date,
+        value_key="switch", start_token="on", end_token="off",
+    )
+
+
 # ─────────────────────────── vibration ───────────────────────────
 
 def extract_move_intervals(
@@ -359,6 +500,40 @@ def _last_value(rows: Iterable[dict[str, str]], value_key: str) -> Optional[str]
     return pairs[-1][1] if pairs else None
 
 
+def _prev_last_float(
+    rows_prev_day: Optional[Iterable[dict[str, str]]], value_key: str
+) -> Optional[float]:
+    """전날 rows 에서 value_key 컬럼의 마지막 유한 float 값 (없으면 None).
+
+    line plot 일자 경계 연장(00:00 시작점)에서 직전 관측값을 가져올 때 사용 (DISPLAY.md §4.6/§4.9).
+    """
+    if rows_prev_day is None:
+        return None
+    s = _last_value(rows_prev_day, value_key=value_key)
+    return _parse_finite_float(s) if s else None
+
+
+def _carry_boundary_points(
+    series: list[tuple[str, float]],
+    target_date: str,
+    has_next_day: bool,
+    prev_last: Optional[float],
+) -> None:
+    """line plot 시계열을 일자 양끝(00:00 / 24:00)으로 연장 (in-place, DISPLAY.md §4.6/§4.9).
+
+    - 전날 마지막값(prev_last)이 있으면 오늘 `00:00:00` 점으로 prepend (이미 00:00 샘플이 있으면 생략) —
+      직전 관측값이 자정까지 유지되었다고 간주해 선이 좌측 끝에서 시작하게 한다.
+    - 다음날 데이터가 있으면(has_next_day) 오늘 마지막값을 `23:59:59`(=24:00) 점으로 append —
+      선이 우측 끝까지 이어지게 한다. 다음날 파일이 없으면(당일 등) 연장하지 않는다.
+    """
+    day_start = f"{target_date} 00:00:00"
+    day_end = f"{target_date} 23:59:59"
+    if prev_last is not None and (not series or series[0][0] > day_start):
+        series.insert(0, (day_start, prev_last))
+    if has_next_day and series and series[-1][0] < day_end:
+        series.append((day_end, series[-1][1]))
+
+
 # ─────────────────────────── X축 좌표 변환 ───────────────────────────
 
 def kst_str_to_seconds_of_day(kst_str: str) -> int:
@@ -382,7 +557,12 @@ def date_range_ascending(to_date: str, days: int) -> list[str]:
 # ─────────────────────────── 그룹 합산 헬퍼 (DISPLAY.md §4.8) ───────────────────────────
 
 def union_intervals(intervals: list[Interval]) -> list[Interval]:
-    """여러 디바이스의 interval 들을 시간상 합집합으로 병합 (DISPLAY.md §4.8).
+    """여러 interval 을 시간상 합집합으로 병합하는 순수 유틸.
+
+    NOTE: DISPLAY.md §4.8 그룹 화면이 union(단일 색) → 멤버 색 오버레이로 바뀌면서
+    그룹 병합 경로(routes/display.py `_merge_panel_for_type`)는 더 이상 이 함수를 호출하지
+    않는다. 향후 "어느 한 멤버라도 active" 합산 뷰가 필요할 때 재사용 가능하도록 유지.
+
 
     같은 그룹·같은 device_type 멤버들이 각자 산출한 interval 들을 받아
     겹치거나 인접한 구간을 하나로 합친다. "어느 한 멤버라도 active이면 active" 의미.
@@ -415,9 +595,11 @@ def union_intervals(intervals: list[Interval]) -> list[Interval]:
 
 
 def merge_points(points: list[PointEvent]) -> list[PointEvent]:
-    """여러 디바이스의 point 이벤트를 시각 오름차순으로 concat 정렬 (DISPLAY.md §4.8).
+    """여러 point 이벤트를 시각 오름차순으로 concat 정렬하는 순수 유틸.
 
-    각 point 의 label 은 그대로 유지 — 합집합 시 dedup 하지 않음 (멤버별 발생을 모두 노출).
+    각 point 의 label 은 그대로 유지 — dedup 하지 않음.
+    NOTE: union_intervals 와 마찬가지로 §4.8 멤버 색 오버레이 전환 후 그룹 병합 경로에서는
+    미사용. 합산 뷰 재도입 시 재사용 가능하도록 유지.
     """
     return sorted(points, key=lambda p: p.at)
 
@@ -576,6 +758,22 @@ def extract_st_contact_intervals(
     return _extract_st_paired_intervals(
         rows_today, rows_prev_day, target_date,
         value_key="contact", start_token="open", end_token="closed",
+    )
+
+
+def extract_st_water_intervals(
+    rows_today: Iterable[dict[str, str]],
+    rows_prev_day: Optional[Iterable[dict[str, str]]] = None,
+    target_date: str = "",
+) -> list[Interval]:
+    """SmartThings waterSensor.water ('wet'/'dry') 로 누수 영역 추출 (DISPLAY.md §4.10 SmartThings 분기).
+
+    Aqara leak_status 1/0 페어와 의미 동일 (wet↔1, dry↔0). 컬럼명은 'water'.
+    door 의 contact 와 완전히 같은 페어 패턴이다 (toggle 없음).
+    """
+    return _extract_st_paired_intervals(
+        rows_today, rows_prev_day, target_date,
+        value_key="water", start_token="wet", end_token="dry",
     )
 
 
@@ -845,11 +1043,20 @@ def extract_temp_humi_points(rows: Iterable[dict[str, str]]) -> list[PointEvent]
     return points
 
 
-def extract_temp_humi_series(rows: Iterable[dict[str, str]]) -> dict:
+def extract_temp_humi_series(
+    rows: Iterable[dict[str, str]],
+    rows_prev_day: Optional[Iterable[dict[str, str]]] = None,
+    has_next_day: bool = False,
+    target_date: str = "",
+) -> dict:
     """temp_humi CSV → 온도/습도 line plot 시계열 데이터 (DISPLAY.md §4.6).
 
     각 시계열은 (time_str, value_float) 페어 리스트. 빈 컬럼·파싱 실패 행은 스킵.
     두 측정값의 보고 시각은 어긋날 수 있으므로 (DEVICE.md §8.1) 컬럼별로 따로 수집.
+
+    일자 경계 연장 (DISPLAY.md §4.6, target_date 가 주어질 때 — 전력 plot §4.9 와 동일):
+      - 전날(rows_prev_day) 데이터가 있으면 그 마지막 값을 오늘 `00:00:00` 점으로 prepend.
+      - 다음날 데이터가 있으면(has_next_day) 오늘 마지막 값을 `23:59:59`(=24:00) 점으로 append.
 
     반환 dict 구조 (템플릿 SVG polyline 좌표 계산용):
       {
@@ -883,6 +1090,17 @@ def extract_temp_humi_series(rows: Iterable[dict[str, str]]) -> dict:
     temps.sort(key=lambda x: x[0])
     humis.sort(key=lambda x: x[0])
 
+    # 일자 경계 연장 — 전날 마지막값 → 00:00, 오늘 마지막값 → 24:00 (DISPLAY.md §4.6).
+    if target_date:
+        _carry_boundary_points(
+            temps, target_date, has_next_day,
+            _prev_last_float(rows_prev_day, "temperature_value"),
+        )
+        _carry_boundary_points(
+            humis, target_date, has_next_day,
+            _prev_last_float(rows_prev_day, "humidity_value"),
+        )
+
     def _range(vals: list[float], default_lo: float, default_hi: float) -> tuple[float, float]:
         if not vals:
             return (default_lo, default_hi)
@@ -899,6 +1117,93 @@ def extract_temp_humi_series(rows: Iterable[dict[str, str]]) -> dict:
         "humidity": humis,
         "temp_min": t_lo, "temp_max": t_hi,
         "humi_min": h_lo, "humi_max": h_hi,
+    }
+
+
+def extract_power_series(
+    rows: Iterable[dict[str, str]],
+    hub: str = "aqara",
+    rows_prev_day: Optional[Iterable[dict[str, str]]] = None,
+    has_next_day: bool = False,
+    target_date: str = "",
+) -> dict:
+    """plug_status wide CSV 의 전력 컬럼 → 전력/누적에너지 line plot 시계열 (DISPLAY.md §4.9).
+
+    temp_humi(§4.6) 와 동일한 이중축 line plot 구조:
+      - load_power(W) : 좌측 축 실선
+      - cost_energy(kWh): 우측 축 점선. **단위 통합은 여기서만** 수행 — aqara raw 는
+        0.001kWh 정수 단위이므로 ×0.001 로 kWh 환산, smartthings 는 이미 kWh 라 그대로 (DEVICE.md §11).
+    두 측정값의 보고 시각은 어긋날 수 있어(온습도와 동일) 컬럼별로 따로 수집한다.
+
+    일자 경계 연장 (DISPLAY.md §4.9, target_date 가 주어질 때):
+      - **전날(rows_prev_day) 데이터가 있으면** 그 마지막 값을 오늘 `00:00:00` 점으로 prepend
+        해 선이 좌측 끝에서 시작하게 한다 (직전 관측값이 자정까지 유지되었다고 간주).
+      - **다음날 데이터가 있으면(has_next_day)** 오늘 마지막 값을 `23:59:59`(=24:00) 점으로
+        append 해 선이 우측 끝까지 이어지게 한다. 다음날 파일이 없으면(당일 등) 연장하지 않는다.
+
+    반환 dict (템플릿 SVG polyline 좌표 계산용):
+      {'power': [(time, W), ...], 'energy': [(time, kWh), ...],
+       'power_min'/'power_max', 'energy_min'/'energy_max'}
+    시계열이 비어도 *_min/*_max 키는 항상 존재.
+    """
+    # aqara cost_energy 만 0.001kWh 정수 단위 → kWh 환산 계수. smartthings 는 kWh 그대로.
+    energy_scale = 0.001 if hub == "aqara" else 1.0
+
+    powers: list[tuple[str, float]] = []
+    energies: list[tuple[str, float]] = []
+    for r in rows:
+        t = (r.get("time") or "").strip()
+        if not t:
+            continue
+        try:
+            datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            continue
+        p_s = (r.get("load_power") or "").strip()
+        if p_s:
+            fv = _parse_finite_float(p_s)
+            if fv is not None:
+                powers.append((t, fv))
+        e_s = (r.get("cost_energy") or "").strip()
+        if e_s:
+            fv = _parse_finite_float(e_s)
+            if fv is not None:
+                energies.append((t, fv * energy_scale))
+    powers.sort(key=lambda x: x[0])
+    energies.sort(key=lambda x: x[0])
+
+    # 일자 경계 연장 — 전날 마지막값을 00:00 으로, 오늘 마지막값을 24:00 으로 셋팅 (DISPLAY.md §4.9).
+    if target_date:
+        _carry_boundary_points(
+            powers, target_date, has_next_day,
+            _prev_last_float(rows_prev_day, "load_power"),
+        )
+        # cost_energy 는 화면 미표시지만 일관성을 위해 동일 처리 (raw → kWh 환산 후 carry).
+        el = _prev_last_float(rows_prev_day, "cost_energy")
+        _carry_boundary_points(
+            energies, target_date, has_next_day,
+            el * energy_scale if el is not None else None,
+        )
+
+    def _range(vals: list[float], default_lo: float, default_hi: float) -> tuple[float, float]:
+        if not vals:
+            return (default_lo, default_hi)
+        lo, hi = min(vals), max(vals)
+        if hi - lo < 1e-9:
+            return (lo - 1.0, hi + 1.0)
+        return (lo, hi)
+
+    # 전력은 0 기준 스케일이 자연스러워 하한을 0 으로 고정(음수 없음), 상한만 자동.
+    p_hi = max((v for _, v in powers), default=1.0)
+    p_lo = 0.0
+    if p_hi <= 0.0:
+        p_hi = 1.0
+    e_lo, e_hi = _range([v for _, v in energies], 0.0, 1.0)
+    return {
+        "power": powers,
+        "energy": energies,
+        "power_min": p_lo, "power_max": p_hi,
+        "energy_min": e_lo, "energy_max": e_hi,
     }
 
 
